@@ -71,6 +71,7 @@ jobs:
     needs: [validate, native]
     if: ${{ vars.SLATE_PUBLISH_NPM == 'true' }}
     runs-on: ubuntu-latest
+    environment: NPM_TOKEN
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
