@@ -1,0 +1,14 @@
+[package]
+name = "slate-input"
+description = "Adaptador crossterm para teclado e mouse da Slate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+
+[dependencies]
+crossterm.workspace = true
+slate-core = { path = "../slate-core", version = "1.0.0" }
+thiserror.workspace = true

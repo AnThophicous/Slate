@@ -1,0 +1,13 @@
+[package]
+name = "slate-core"
+description = "Tipos fundamentais e contrato de componentes da Slate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+
+[dependencies]
+bitflags.workspace = true
+unicode-width.workspace = true

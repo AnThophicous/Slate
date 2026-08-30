@@ -1,0 +1,13 @@
+[package]
+name = "slate-renderer"
+description = "Renderizador ANSI leve para frames da Slate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+
+[dependencies]
+slate-core = { path = "../slate-core", version = "1.0.0" }
+unicode-width.workspace = true

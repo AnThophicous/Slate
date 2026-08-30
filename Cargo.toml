@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/slate-core",
+    "crates/slate-input",
+    "crates/slate-renderer",
+    "crates/slate-node",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+authors = ["Slate contributors"]
+readme = "README.md"
+
+[workspace.dependencies]
+bitflags = "2.9"
+crossterm = "0.29"
+napi = { version = "3", default-features = false, features = ["napi4"] }
+napi-build = "2"
+napi-derive = "3"
+thiserror = "2.0"
+unicode-width = "0.2"
