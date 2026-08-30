@@ -40,6 +40,7 @@ pub enum KeyCode {
     Insert,
     Delete,
     F(u8),
+    Unknown,
 }
 
 #[non_exhaustive]
@@ -103,11 +104,18 @@ pub struct MouseEvent {
     position: crate::Point,
     kind: MouseEventKind,
     modifiers: Modifiers,
+    delta_x: i16,
+    delta_y: i16,
 }
 
 impl MouseEvent {
     pub const fn new(position: crate::Point, kind: MouseEventKind, modifiers: Modifiers) -> Self {
-        Self { position, kind, modifiers }
+        Self { position, kind, modifiers, delta_x: 0, delta_y: 0 }
+    }
+    pub const fn with_delta(mut self, delta_x: i16, delta_y: i16) -> Self {
+        self.delta_x = delta_x;
+        self.delta_y = delta_y;
+        self
     }
     pub const fn position(self) -> crate::Point {
         self.position
@@ -117,6 +125,12 @@ impl MouseEvent {
     }
     pub const fn modifiers(self) -> Modifiers {
         self.modifiers
+    }
+    pub const fn delta_x(self) -> i16 {
+        self.delta_x
+    }
+    pub const fn delta_y(self) -> i16 {
+        self.delta_y
     }
 }
 

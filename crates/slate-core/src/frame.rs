@@ -6,17 +6,24 @@ use crate::{Point, Rect, Size, Style};
 pub struct Cell {
     symbol: char,
     style: Style,
+    continuation: bool,
 }
 
 impl Cell {
     pub const fn new(symbol: char, style: Style) -> Self {
-        Self { symbol, style }
+        Self { symbol, style, continuation: false }
+    }
+    pub const fn continuation(style: Style) -> Self {
+        Self { symbol: ' ', style, continuation: true }
     }
     pub const fn symbol(self) -> char {
         self.symbol
     }
     pub const fn style(self) -> Style {
         self.style
+    }
+    pub const fn is_continuation(self) -> bool {
+        self.continuation
     }
 }
 
@@ -82,7 +89,16 @@ impl Frame {
             if y >= self.size.height() {
                 break;
             }
+            if width == 1
+                && x.saturating_add(1) < self.size.width()
+                && self.get(Point::new(x.saturating_add(1), y)).is_some_and(Cell::is_continuation)
+            {
+                self.set(Point::new(x.saturating_add(1), y), Cell::default());
+            }
             self.set(Point::new(x, y), Cell::new(character, style));
+            if width == 2 {
+                self.set(Point::new(x.saturating_add(1), y), Cell::continuation(style));
+            }
             x = x.saturating_add(width);
         }
     }

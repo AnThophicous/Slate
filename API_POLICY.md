@@ -1,6 +1,6 @@
 # Política de API 1.x
 
-Slate 1.0.0 é uma linha LTS. Compatibilidade é um requisito de projeto, não uma
+Slate 1.5.0 é uma linha LTS. Compatibilidade é um requisito de projeto, não uma
 promessa feita apenas no momento do release.
 
 1. APIs públicas não são removidas, renomeadas ou alteradas semanticamente em 1.x.

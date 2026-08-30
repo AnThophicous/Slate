@@ -28,11 +28,38 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
-  github-release:
+  native:
     needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run native:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slate-native-${{ matrix.os }}
+          path: packages/slate-native/*.node
+          if-no-files-found: error
+
+  github-release:
+    needs: [validate, native]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          files: release-assets/*.node

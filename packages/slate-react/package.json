@@ -1,0 +1,45 @@
+{
+  "name": "@slate-terminal/react",
+  "version": "1.5.0",
+  "description": "Camada declarativa opcional para árvores de componentes Slate.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/jsx-runtime.d.ts",
+      "import": "./dist/jsx-runtime.js",
+      "default": "./dist/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./dist/jsx-dev-runtime.d.ts",
+      "import": "./dist/jsx-dev-runtime.js",
+      "default": "./dist/jsx-dev-runtime.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:typecheck": "tsc --noEmit -p test/tsconfig.json",
+    "test": "npm run build && npm run test:typecheck && node --test test/index.test.mjs"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "yoga-layout": ">=3"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true },
+    "yoga-layout": { "optional": true }
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

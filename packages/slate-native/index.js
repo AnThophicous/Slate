@@ -1,9 +1,12 @@
 const path = require("node:path");
 const fs = require("node:fs");
 
+const platformTarget = process.platform === "win32" ? `win32-${process.arch}-msvc` : process.platform === "linux" ? `linux-${process.arch}-gnu` : `darwin-${process.arch}`;
 const names = [
-  `slate_node.${process.platform}-${process.arch}.node`,
+  `slate_node.${platformTarget}.node`,
   "slate_node.node",
+  `index.${platformTarget}.node`,
+  "index.node",
 ];
 const candidates = names.map((name) => path.join(__dirname, name));
 candidates.push(path.join(__dirname, "..", "..", "target", "release", "slate_node.dll"));

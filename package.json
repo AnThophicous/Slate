@@ -1,23 +1,25 @@
 {
   "name": "slate-workspace",
-  "version": "1.0.0",
+  "version": "1.5.0",
   "private": true,
   "description": "Workspace da biblioteca Slate para interfaces interativas de terminal.",
   "workspaces": ["packages/*"],
   "engines": { "node": ">=18" },
   "scripts": {
-    "build": "npm run build --workspace @slate-terminal/core",
-    "typecheck": "npm run typecheck --workspace @slate-terminal/core",
-    "test": "npm run test --workspace @slate-terminal/core",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:stress": "npm run build && node --test tests/node-stress.mjs",
     "rust:fmt": "cargo fmt --all -- --check",
     "rust:check": "cargo check --workspace --all-targets",
     "rust:test": "cargo test --workspace",
     "rust:clippy": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "rust:docs": "cargo doc --workspace --no-deps",
-    "native:build": "cargo build -p slate-node --release"
+    "native:build": "npm run build --workspace @slate-terminal/native"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "@napi-rs/cli": "^3.8.6"
   }
 }

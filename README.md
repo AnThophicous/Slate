@@ -2,7 +2,7 @@
 
 Slate é uma biblioteca Rust modular para construir interfaces interativas no
 terminal, com adaptadores oficiais para teclado, mouse, ANSI e Node.js/TypeScript.
-A versão atual é **1.0.0 LTS**.
+A versão atual é **1.5.0 LTS**.
 
 ```rust
 use slate_core::{Color, Frame, Point, Size, Style};
@@ -21,14 +21,15 @@ process.stdout.write(renderText("Olá, Slate", { foreground: "#5eead4" }));
 
 ## Estrutura
 
-- `slate-core`: geometria, cores, estilos, frames, eventos e contrato `Component`.
+- `slate-core`: geometria, cores, estilos, frames, eventos, containers e contrato `Component`.
 - `slate-input`: adaptação crossterm para teclado, mouse, resize e paste.
-- `slate-renderer`: saída ANSI para qualquer `Write`.
+- `slate-renderer`: saída ANSI incremental para qualquer `Write`.
 - `slate-node`: binding N-API nativo em Rust.
 - `packages/slate`: facade TypeScript estável e fallback ANSI para desenvolvimento.
+- `packages/slate-react`: camada declarativa opcional para JSX, hooks, reconciliação e layout Flexbox/Yoga.
 
-Efeitos, animações e shaders visuais não fazem parte do núcleo 1.0.0. Serão
-adicionados como módulos opcionais, sem contaminar o contrato base.
+`slate-effects` fornece efeitos opcionais como `Glow` e `ColorShift`, sem
+contaminar o contrato base.
 
 ## Prática LTS
 
@@ -45,8 +46,8 @@ npm run typecheck
 npm test
 ```
 
-O binding nativo é compilado com `npm run native:build`. O empacotamento de
-artefatos `.node` por plataforma será acoplado ao release automatizado.
+O binding nativo é compilado com `npm run native:build`. Os releases geram
+artefatos `.node` para Linux, Windows e macOS.
 
 ## Licença
 

@@ -1,7 +1,10 @@
 use std::{io, time::Duration};
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture},
+    event::{
+        self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+        EnableFocusChange, EnableMouseCapture,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode},
 };
@@ -41,6 +44,18 @@ impl CrosstermInput {
     pub fn disable_mouse_capture(&self) -> Result<(), InputError> {
         execute!(io::stdout(), DisableMouseCapture).map_err(InputError::from)
     }
+    pub fn enable_bracketed_paste(&self) -> Result<(), InputError> {
+        execute!(io::stdout(), EnableBracketedPaste).map_err(InputError::from)
+    }
+    pub fn disable_bracketed_paste(&self) -> Result<(), InputError> {
+        execute!(io::stdout(), DisableBracketedPaste).map_err(InputError::from)
+    }
+    pub fn enable_focus_change(&self) -> Result<(), InputError> {
+        execute!(io::stdout(), EnableFocusChange).map_err(InputError::from)
+    }
+    pub fn disable_focus_change(&self) -> Result<(), InputError> {
+        execute!(io::stdout(), DisableFocusChange).map_err(InputError::from)
+    }
 }
 
 impl EventSource for CrosstermInput {
@@ -63,11 +78,14 @@ fn convert(value: event::Event) -> Event {
                 },
             ),
         ),
-        event::Event::Mouse(mouse) => Event::Mouse(MouseEvent::new(
-            Point::new(mouse.column, mouse.row),
-            convert_mouse_kind(mouse.kind),
-            modifiers(mouse.modifiers),
-        )),
+        event::Event::Mouse(mouse) => Event::Mouse(
+            MouseEvent::new(
+                Point::new(mouse.column, mouse.row),
+                convert_mouse_kind(mouse.kind),
+                modifiers(mouse.modifiers),
+            )
+            .with_delta(mouse_delta(mouse.kind).0, mouse_delta(mouse.kind).1),
+        ),
         event::Event::Resize(width, height) => Event::Resize(Size::new(width, height)),
         event::Event::Paste(text) => Event::Paste(text),
         event::Event::FocusGained => Event::FocusGained,
@@ -110,7 +128,7 @@ fn convert_key_code(value: event::KeyCode) -> KeyCode {
         event::KeyCode::Insert => KeyCode::Insert,
         event::KeyCode::Delete => KeyCode::Delete,
         event::KeyCode::F(value) => KeyCode::F(value),
-        _ => KeyCode::Escape,
+        _ => KeyCode::Unknown,
     }
 }
 
@@ -132,5 +150,33 @@ fn convert_button(value: event::MouseButton) -> MouseButton {
         event::MouseButton::Left => MouseButton::Left,
         event::MouseButton::Right => MouseButton::Right,
         event::MouseButton::Middle => MouseButton::Middle,
+    }
+}
+
+fn mouse_delta(value: event::MouseEventKind) -> (i16, i16) {
+    match value {
+        event::MouseEventKind::ScrollUp => (0, 1),
+        event::MouseEventKind::ScrollDown => (0, -1),
+        event::MouseEventKind::ScrollLeft => (-1, 0),
+        event::MouseEventKind::ScrollRight => (1, 0),
+        _ => (0, 0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_mouse_coordinates_and_modifiers() {
+        let event = convert(event::Event::Mouse(event::MouseEvent {
+            kind: event::MouseEventKind::Down(event::MouseButton::Left),
+            column: 42,
+            row: 7,
+            modifiers: event::KeyModifiers::SHIFT,
+        }));
+        assert!(
+            matches!(event, Event::Mouse(mouse) if mouse.position() == Point::new(42, 7) && mouse.modifiers().contains(Modifiers::SHIFT))
+        );
     }
 }
