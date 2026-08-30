@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   validate:
@@ -18,7 +19,7 @@ jobs:
           components: rustfmt, clippy
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: cargo fmt --all -- --check
@@ -79,21 +80,24 @@ jobs:
           merge-multiple: true
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - run: npm ci
       - run: npm run build
       - run: cp release-assets/*.node packages/slate-native/
-      - name: Verify npm publisher identity
-        run: npm whoami
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: npm publish --workspace @slate-terminal/native --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: npm publish --workspace @slate-terminal/core --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: npm publish --workspace @slate-terminal/react --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish packages through npm Trusted Publishing
+        shell: bash
+        run: |
+          publish_if_missing() {
+            package="$1"
+            version="$2"
+            if npm view "$package@$version" version >/dev/null 2>&1; then
+              echo "$package@$version already exists; skipping"
+            else
+              npm publish --workspace "$package" --access public
+            fi
+          }
+          publish_if_missing @slate-terminal/core 2.1.0
+          publish_if_missing @slate-terminal/react 2.1.0
+          publish_if_missing @slate-terminal/native 2.1.0
