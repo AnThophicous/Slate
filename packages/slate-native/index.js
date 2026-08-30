@@ -1,7 +1,8 @@
 const path = require("node:path");
 const fs = require("node:fs");
 
-const platformTarget = process.platform === "win32" ? `win32-${process.arch}-msvc` : process.platform === "linux" ? `linux-${process.arch}-gnu` : `darwin-${process.arch}`;
+const platformTarget = process.platform === "win32" ? `win32-${process.arch}-msvc` : process.platform === "linux" ? `linux-${process.arch}-gnu` : process.platform === "darwin" ? `darwin-${process.arch}` : undefined;
+if (!platformTarget) throw new Error(`Slate native does not support ${process.platform}-${process.arch}`);
 const names = [
   `slate_node.${platformTarget}.node`,
   "slate_node.node",

@@ -1,13 +1,138 @@
 import { createRequire } from "node:module";
 
-export const VERSION = "1.5.0" as const;
+export const VERSION = "2.0.0" as const;
 
 export type ElementId = string | number;
 export type Color = "default" | `#${string}`;
 export type KeyCode = string;
+export type KeyPhase = "press" | "repeat" | "release";
 export type Modifiers = number;
 export type EventResult = "ignored" | "consumed" | "render" | "exit";
-export type NodeKind = "container" | "block" | "button";
+export type FlexDimension = number | `${number}%` | "auto";
+export type FlexDirection = "row" | "column";
+export type FlexWrap = "nowrap" | "wrap" | "wrap-reverse";
+export type JustifyContent = "flex-start" | "center" | "flex-end" | "space-between" | "space-around" | "space-evenly";
+export type AlignItems = "stretch" | "flex-start" | "center" | "flex-end";
+export type Overflow = "visible" | "hidden" | "scroll" | "auto";
+export type NodeKind = "container" | "block" | "button" | "text" | "input" | "select" | "checkbox" | "tabs" | "table" | "spinner" | "progress" | "modal" | "scrollView" | "list" | "form";
+
+export interface ReadableSignal<T> {
+  readonly __slateSignal: true;
+  readonly get: () => T;
+  readonly peek: () => T;
+  readonly subscribe: (listener: () => void) => () => void;
+}
+
+export interface WritableSignal<T> extends ReadableSignal<T> {
+  readonly set: (value: T | ((previous: T) => T)) => void;
+  readonly update: (value: T | ((previous: T) => T)) => void;
+}
+
+interface Observer {
+  readonly run: () => void;
+  readonly dependencies: Set<ReadableSignal<unknown>>;
+  readonly cleanups: Set<() => void>;
+  active: boolean;
+}
+
+let activeObserver: Observer | undefined;
+let batchDepth = 0;
+const pendingSubscribers = new Set<() => void>();
+
+export function signal<T>(initial: T): WritableSignal<T> {
+  let value = initial;
+  const listeners = new Set<() => void>();
+  const result: WritableSignal<T> = {
+    __slateSignal: true,
+    get: () => {
+      activeObserver?.dependencies.add(result as ReadableSignal<unknown>);
+      return value;
+    },
+    peek: () => value,
+    subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+    set: action => {
+      const next = typeof action === "function" ? (action as (previous: T) => T)(value) : action;
+      if (Object.is(value, next)) return;
+      value = next;
+      for (const listener of [...listeners]) {
+        if (batchDepth > 0) pendingSubscribers.add(listener);
+        else listener();
+      }
+    },
+    update: action => result.set(action)
+  };
+  return result;
+}
+
+export function computed<T>(derive: () => T): ReadableSignal<T> {
+  const state = signal(derive());
+  effect(() => state.set(derive()));
+  return { __slateSignal: true, get: state.get, peek: state.peek, subscribe: state.subscribe };
+}
+
+export function effect(run: () => void): () => void {
+  let observer: Observer;
+  const execute = () => {
+    if (!observer.active) return;
+    for (const cleanup of observer.cleanups) cleanup();
+    observer.cleanups.clear();
+    observer.dependencies.clear();
+    const previous = activeObserver;
+    activeObserver = observer;
+    try {
+      run();
+    } finally {
+      activeObserver = previous;
+    }
+    for (const dependency of observer.dependencies) observer.cleanups.add(dependency.subscribe(observer.run));
+  };
+  observer = {
+    run: execute,
+    dependencies: new Set(),
+    cleanups: new Set(),
+    active: true
+  };
+  execute();
+  return () => {
+    if (!observer.active) return;
+    observer.active = false;
+    for (const cleanup of observer.cleanups) cleanup();
+    observer.cleanups.clear();
+    observer.dependencies.clear();
+  };
+}
+
+export function batch(run: () => void): void {
+  batchDepth += 1;
+  try {
+    run();
+  } finally {
+    batchDepth -= 1;
+    if (batchDepth === 0) {
+      const subscribers = [...pendingSubscribers];
+      pendingSubscribers.clear();
+      for (const subscriber of subscribers) subscriber();
+    }
+  }
+}
+
+export function untracked<T>(run: () => T): T {
+  const previous = activeObserver;
+  activeObserver = undefined;
+  try {
+    return run();
+  } finally {
+    activeObserver = previous;
+  }
+}
+
+export function isSignal(value: unknown): value is ReadableSignal<unknown> {
+  return typeof value === "object" && value !== null && (value as ReadableSignal<unknown>).__slateSignal === true && typeof (value as ReadableSignal<unknown>).get === "function";
+}
+
+export function readReactive<T>(value: T | ReadableSignal<T>): T {
+  return isSignal(value) ? value.get() as T : value;
+}
 
 export interface RenderOptions {
   readonly text: string;
@@ -20,9 +145,10 @@ export interface RenderOptions {
 }
 
 export interface SlateEvent {
-  readonly kind: "key" | "mouse" | "resize" | "paste" | "focusGained" | "focusLost";
+  readonly kind: "key" | "mouse" | "resize" | "paste" | "focusGained" | "focusLost" | "ime";
   readonly code?: string;
   readonly text?: string;
+  readonly phase?: KeyPhase;
   readonly modifiers?: number;
   readonly x?: number;
   readonly y?: number;
@@ -32,6 +158,44 @@ export interface SlateEvent {
   readonly button?: "left" | "right" | "middle" | "other";
   readonly deltaX?: number;
   readonly deltaY?: number;
+}
+
+export interface FlexStyle {
+  readonly display?: "flex" | "none";
+  readonly flexDirection?: FlexDirection;
+  readonly flexWrap?: FlexWrap;
+  readonly flexGrow?: number;
+  readonly flexShrink?: number;
+  readonly flexBasis?: FlexDimension;
+  readonly width?: FlexDimension;
+  readonly height?: FlexDimension;
+  readonly minWidth?: FlexDimension;
+  readonly maxWidth?: FlexDimension;
+  readonly minHeight?: FlexDimension;
+  readonly maxHeight?: FlexDimension;
+  readonly gap?: FlexDimension;
+  readonly rowGap?: FlexDimension;
+  readonly columnGap?: FlexDimension;
+  readonly padding?: FlexDimension;
+  readonly margin?: FlexDimension;
+  readonly justifyContent?: JustifyContent;
+  readonly alignItems?: AlignItems;
+  readonly alignSelf?: AlignItems | "auto";
+  readonly overflow?: Overflow;
+  readonly scrollLeft?: number;
+  readonly scrollTop?: number;
+}
+
+export interface SelectOption {
+  readonly label: string;
+  readonly value?: string;
+  readonly disabled?: boolean;
+}
+
+export interface TableColumn {
+  readonly key: string;
+  readonly title?: string;
+  readonly width?: number | `${number}%`;
 }
 
 export interface EffectOptions {
@@ -50,6 +214,7 @@ export type EventHandler = (event: SlateEvent, node: SlateNode) => EventResult |
 
 export interface NodeProps {
   readonly id?: ElementId;
+  readonly key?: string | number;
   readonly x?: number;
   readonly y?: number;
   readonly width?: number;
@@ -58,15 +223,59 @@ export interface NodeProps {
   readonly focusable?: boolean;
   readonly foreground?: Color;
   readonly background?: Color;
+  readonly style?: FlexStyle;
+  readonly direction?: FlexDirection;
+  readonly wrap?: FlexWrap;
+  readonly gap?: FlexDimension;
+  readonly flexGrow?: number;
+  readonly flexShrink?: number;
+  readonly flexBasis?: FlexDimension;
+  readonly minWidth?: FlexDimension;
+  readonly maxWidth?: FlexDimension;
+  readonly minHeight?: FlexDimension;
+  readonly maxHeight?: FlexDimension;
+  readonly justifyContent?: JustifyContent;
+  readonly alignItems?: AlignItems;
+  readonly alignSelf?: AlignItems | "auto";
+  readonly overflow?: Overflow;
+  readonly overflowX?: Overflow;
+  readonly overflowY?: Overflow;
+  readonly scrollLeft?: number;
+  readonly scrollTop?: number;
   readonly text?: string;
   readonly placeholder?: string;
   readonly label?: string;
+  readonly value?: string | number | boolean | ReadableSignal<string | number | boolean>;
+  readonly defaultValue?: string | number | boolean;
+  readonly options?: readonly SelectOption[];
+  readonly selectedIndex?: number | ReadableSignal<number>;
+  readonly checked?: boolean | ReadableSignal<boolean>;
+  readonly activeIndex?: number | ReadableSignal<number>;
+  readonly tabs?: readonly string[];
+  readonly rows?: readonly (readonly (string | number)[] | Record<string, string | number>)[];
+  readonly columns?: readonly TableColumn[];
+  readonly items?: readonly (string | number)[];
+  readonly progress?: number | ReadableSignal<number>;
+  readonly spinning?: boolean | ReadableSignal<boolean>;
+  readonly open?: boolean | ReadableSignal<boolean>;
+  readonly title?: string | ReadableSignal<string>;
+  readonly cursor?: number | ReadableSignal<number>;
   readonly children?: NodeChild | readonly NodeChild[];
   readonly onEvent?: EventHandler;
+  readonly onKey?: EventHandler;
+  readonly onMouse?: EventHandler;
+  readonly onPaste?: EventHandler;
+  readonly onResize?: EventHandler;
+  readonly onIme?: EventHandler;
   readonly onPress?: EventHandler;
+  readonly onChange?: (value: string | number | boolean, node: SlateNode) => EventResult | void;
+  readonly onSubmit?: (value: string, node: SlateNode) => EventResult | void;
+  readonly onFocus?: (node: SlateNode) => EventResult | void;
+  readonly onBlur?: (node: SlateNode) => EventResult | void;
+  readonly onScroll?: (x: number, y: number, node: SlateNode) => EventResult | void;
 }
 
-export type NodeChild = SlateNode | string | null | false | undefined | readonly NodeChild[];
+export type NodeChild = SlateNode | string | number | boolean | null | undefined | ReadableSignal<unknown> | readonly NodeChild[];
 
 export interface SlateNode {
   readonly kind: NodeKind;
@@ -76,6 +285,7 @@ export interface SlateNode {
 }
 
 interface NativeBinding {
+  version?(): string;
   render(options: RenderOptions): string;
   renderText(text: string): string;
   renderGlow?(options: { text: string; color: string; to?: string; width?: number; height?: number; x?: number; y?: number; radius?: number; intensity?: number; elapsedMs?: number }): string;
@@ -88,6 +298,11 @@ interface NativeBinding {
   disableBracketedPaste?(): void;
   enableFocusChange?(): void;
   disableFocusChange?(): void;
+  enableAlternateScreen?(): void;
+  disableAlternateScreen?(): void;
+  clearScreen?(): void;
+  hideCursor?(): void;
+  showCursor?(): void;
   pollEvent?(timeoutMs?: number): SlateEvent | null;
 }
 
@@ -108,6 +323,8 @@ function native(): NativeBinding | undefined {
 }
 
 export function hasNativeBinding(): boolean { return native() !== undefined; }
+
+export function version(): string { return native()?.version?.() ?? VERSION; }
 
 export function render(options: RenderOptions): string {
   validate(options);
@@ -178,15 +395,49 @@ export function enableFocusChange(): void {
   binding.enableFocusChange();
 }
 export function disableFocusChange(): void { native()?.disableFocusChange?.(); }
+export function enableAlternateScreen(): void {
+  const binding = native();
+  if (!binding?.enableAlternateScreen) throw new Error("Binding nativo da Slate não encontrado; compile slate-node primeiro.");
+  binding.enableAlternateScreen();
+}
+export function disableAlternateScreen(): void { native()?.disableAlternateScreen?.(); }
+export function clearScreen(): void { native()?.clearScreen?.(); }
+export function hideCursor(): void { native()?.hideCursor?.(); }
+export function showCursor(): void { native()?.showCursor?.(); }
 export function pollEvent(timeoutMs = 16): SlateEvent | null { return native()?.pollEvent?.(timeoutMs) ?? null; }
+export function createInputSource(): { readonly poll: (timeoutMs?: number) => SlateEvent | null } { return { poll: pollEvent }; }
 
 export function createContainer(props: NodeProps = {}): SlateNode { return createNode("container", props); }
 export function createBlock(props: NodeProps = {}): SlateNode { return createNode("block", props); }
 export function createButton(props: NodeProps = {}): SlateNode { return createNode("button", { ...props, focusable: props.focusable ?? true }); }
+export function createText(props: NodeProps = {}): SlateNode { return createNode("text", props); }
+export function createInput(props: NodeProps = {}): SlateNode { return createNode("input", { ...props, focusable: props.focusable ?? true }); }
+export function createSelect(props: NodeProps = {}): SlateNode { return createNode("select", { ...props, focusable: props.focusable ?? true }); }
+export function createCheckbox(props: NodeProps = {}): SlateNode { return createNode("checkbox", { ...props, focusable: props.focusable ?? true }); }
+export function createTabs(props: NodeProps = {}): SlateNode { return createNode("tabs", { ...props, focusable: props.focusable ?? true }); }
+export function createTable(props: NodeProps = {}): SlateNode { return createNode("table", props); }
+export function createSpinner(props: NodeProps = {}): SlateNode { return createNode("spinner", props); }
+export function createProgress(props: NodeProps = {}): SlateNode { return createNode("progress", props); }
+export function createModal(props: NodeProps = {}): SlateNode { return createNode("modal", props); }
+export function createScrollView(props: NodeProps = {}): SlateNode { return createNode("scrollView", { ...props, overflow: props.overflow ?? "scroll" }); }
+export function createList(props: NodeProps = {}): SlateNode { return createNode("list", props); }
+export function createForm(props: NodeProps = {}): SlateNode { return createNode("form", props); }
 
 export function Container(props: NodeProps = {}): SlateNode { return createContainer(props); }
 export function Block(props: NodeProps = {}): SlateNode { return createBlock(props); }
 export function Button(props: NodeProps = {}): SlateNode { return createButton(props); }
+export function Text(props: NodeProps = {}): SlateNode { return createText(props); }
+export function Input(props: NodeProps = {}): SlateNode { return createInput(props); }
+export function Select(props: NodeProps = {}): SlateNode { return createSelect(props); }
+export function Checkbox(props: NodeProps = {}): SlateNode { return createCheckbox(props); }
+export function Tabs(props: NodeProps = {}): SlateNode { return createTabs(props); }
+export function Table(props: NodeProps = {}): SlateNode { return createTable(props); }
+export function Spinner(props: NodeProps = {}): SlateNode { return createSpinner(props); }
+export function Progress(props: NodeProps = {}): SlateNode { return createProgress(props); }
+export function Modal(props: NodeProps = {}): SlateNode { return createModal(props); }
+export function ScrollView(props: NodeProps = {}): SlateNode { return createScrollView(props); }
+export function List(props: NodeProps = {}): SlateNode { return createList(props); }
+export function Form(props: NodeProps = {}): SlateNode { return createForm(props); }
 export const Fragment = Symbol.for("slate.fragment");
 
 export function renderNode(node: SlateNode, options: Omit<RenderOptions, "text"> = {}): string {
@@ -194,24 +445,72 @@ export function renderNode(node: SlateNode, options: Omit<RenderOptions, "text">
   return renderText(text, options);
 }
 
-export class SlateApp {
+export class SlateApp<S = unknown> {
   readonly root: SlateNode;
   private focusedId: ElementId | undefined;
+  private stateValue: S | undefined;
+  private readonly stateListeners = new Set<() => void>();
 
-  constructor(root: SlateNode) { this.root = root; }
+  constructor(root: SlateNode, initialState?: S) {
+    if (hasDuplicateIds(root, new Set())) throw new RangeError("IDs Slate duplicados");
+    this.root = root;
+    this.stateValue = initialState;
+  }
+  getState(): S | undefined { return this.stateValue; }
+  setState(action: S | ((previous: S | undefined) => S)): void {
+    const next = typeof action === "function" ? (action as (previous: S | undefined) => S)(this.stateValue) : action;
+    if (Object.is(this.stateValue, next)) return;
+    this.stateValue = next;
+    for (const listener of [...this.stateListeners]) listener();
+  }
+  subscribe(listener: () => void): () => void { this.stateListeners.add(listener); return () => this.stateListeners.delete(listener); }
   find(id: ElementId): SlateNode | undefined { return findNode(this.root, id); }
   focus(id: ElementId): boolean {
     const node = this.find(id);
     if (!node?.props.focusable) return false;
+    if (this.focusedId === id) return true;
+    const previous = this.focusedId;
     this.focusedId = id;
+    if (previous !== undefined) {
+      const previousNode = this.find(previous);
+      previousNode?.props.onBlur?.(previousNode);
+    }
+    node.props.onFocus?.(node);
     return true;
   }
   focused(): ElementId | undefined { return this.focusedId; }
+  focusNext(reverse = false): ElementId | undefined {
+    const ids = focusableIds(this.root);
+    if (ids.length === 0) return undefined;
+    const current = this.focusedId === undefined ? (reverse ? 0 : -1) : ids.indexOf(this.focusedId);
+    const index = (current + (reverse ? -1 : 1) + ids.length) % ids.length;
+    const next = ids[index];
+    if (next !== undefined) this.focus(next);
+    return this.focusedId;
+  }
+  blur(): void {
+    const previous = this.focusedId;
+    this.focusedId = undefined;
+    if (previous !== undefined) {
+      const previousNode = this.find(previous);
+      previousNode?.props.onBlur?.(previousNode);
+    }
+  }
+  edit(id: ElementId, patch: NodeProps): boolean { return this.update(id, patch); }
   update(id: ElementId, patch: NodeProps): boolean {
     const node = this.find(id);
     if (!node) return false;
+    const previousProps = node.props;
     node.props = { ...node.props, ...patch, id: node.id } as NodeProps;
-    if (patch.children !== undefined) node.children.splice(0, node.children.length, ...normalizeChildren(patch.children));
+    if (patch.children !== undefined) {
+      const children = normalizeChildren(patch.children);
+      const previous = node.children.splice(0, node.children.length, ...children);
+      if (hasDuplicateIds(this.root, new Set())) {
+        node.props = previousProps;
+        node.children.splice(0, node.children.length, ...previous);
+        return false;
+      }
+    }
     return true;
   }
   append(parentId: ElementId, child: SlateNode): boolean {
@@ -234,23 +533,36 @@ export class SlateApp {
   setPlaceholder(id: ElementId, placeholder: string): boolean { return this.update(id, { placeholder }); }
   setForeground(id: ElementId, foreground: Color): boolean { return this.update(id, { foreground: foreground === "default" ? foreground : hex(foreground) }); }
   dispatch(event: SlateEvent): EventResult {
+    if (event.kind === "key" && event.phase !== "release" && event.code === "Tab") {
+      this.focusNext((event.modifiers ?? 0) & 1 ? true : false);
+      return "consumed";
+    }
     const path = event.kind === "mouse" && event.x !== undefined && event.y !== undefined ? hitPath(this.root, event.x, event.y) : this.focusedId === undefined ? [this.root] : pathTo(this.root, this.focusedId) ?? [this.root];
+    if (event.kind === "mouse" && event.action === "press") {
+      const target = path.find(node => node.props.focusable === true);
+      if (target) this.focus(target.id);
+    }
     for (const node of path) {
       const result = node.props.onEvent?.(event, node);
       if (result && result !== "ignored") return result;
-      const activatesButton = node.kind === "button" && ((event.kind === "mouse" && event.action === "press") || (event.kind === "key" && (event.code === "Enter" || event.code === " " || event.code === "Space")));
+      const specific = event.kind === "key" ? node.props.onKey : event.kind === "mouse" ? node.props.onMouse : event.kind === "paste" ? node.props.onPaste : event.kind === "resize" ? node.props.onResize : event.kind === "ime" ? node.props.onIme : undefined;
+      const specificResult = specific?.(event, node);
+      if (specificResult && specificResult !== "ignored") return specificResult;
+      const activatesButton = node.kind === "button" && ((event.kind === "mouse" && event.action === "press") || (event.kind === "key" && event.phase !== "release" && (event.code === "Enter" || event.code === " " || event.code === "Space")));
       if (activatesButton) {
         const pressed = node.props.onPress?.(event, node);
         if (pressed && pressed !== "ignored") return pressed;
         return "render";
       }
+      const widgetResult = dispatchWidget(node, event);
+      if (widgetResult !== "ignored") return widgetResult;
     }
     return "ignored";
   }
   render(options: Omit<RenderOptions, "text"> = {}): string { return renderNode(this.root, options); }
 }
 
-export function createApp(root: SlateNode): SlateApp { return new SlateApp(root); }
+export function createApp<S = unknown>(root: SlateNode, initialState?: S): SlateApp<S> { return new SlateApp(root, initialState); }
 
 function createNode(kind: NodeKind, props: NodeProps): SlateNode {
   const id = props.id ?? `slate-${++generatedId}`;
@@ -259,7 +571,7 @@ function createNode(kind: NodeKind, props: NodeProps): SlateNode {
 
 function normalizeChildren(children: NodeProps["children"]): SlateNode[] {
   const values = Array.isArray(children) ? children : children === undefined ? [] : [children];
-  return values.flatMap(value => Array.isArray(value) ? normalizeChildren(value) : typeof value === "string" ? [createBlock({ text: value })] : value ? [value] : []);
+  return values.flatMap(value => Array.isArray(value) ? normalizeChildren(value) : isReadableSignal(value) ? normalizeChildren(value.get() as NodeProps["children"]) : typeof value === "string" || typeof value === "number" ? [createBlock({ text: String(value) })] : value && typeof value === "object" && "kind" in value ? [value as SlateNode] : []);
 }
 
 function findNode(node: SlateNode, id: ElementId): SlateNode | undefined {
@@ -282,13 +594,13 @@ function findParent(node: SlateNode, id: ElementId): SlateNode | undefined {
 
 function flattenText(node: SlateNode): string {
   if (node.props.visible === false) return "";
-  const own = node.kind === "button" ? node.props.label ?? node.props.text ?? "" : node.props.text || node.props.placeholder || "";
+  const own = node.kind === "button" ? readValue(node.props.label) ?? readValue(node.props.text) ?? "" : readValue(node.props.text) || readValue(node.props.placeholder) || readValue(node.props.label) || "";
   const children = node.children.map(flattenText).filter(Boolean);
   return [own, ...children].filter(Boolean).join("\n");
 }
 
 function bounds(node: SlateNode): { x: number; y: number; width: number; height: number } {
-  const text = node.kind === "button" ? node.props.label ?? node.props.text ?? "" : node.props.text || node.props.placeholder || "";
+  const text = String(node.kind === "button" ? readValue(node.props.label) ?? readValue(node.props.text) ?? "" : readValue(node.props.text) || readValue(node.props.placeholder) || readValue(node.props.label) || "");
   const x = node.props.x ?? 0;
   const y = node.props.y ?? 0;
   const children = node.children.map(bounds);
@@ -313,6 +625,115 @@ function hitPath(node: SlateNode, x: number, y: number): SlateNode[] {
   return [node];
 }
 
+function focusableIds(node: SlateNode): ElementId[] {
+  if (node.props.visible === false) return [];
+  return [node.props.focusable ? node.id : undefined, ...node.children.flatMap(focusableIds)].filter((id): id is ElementId => id !== undefined);
+}
+
+function dispatchWidget(node: SlateNode, event: SlateEvent): EventResult {
+  if (node.kind === "input") return dispatchInput(node, event);
+  if (node.kind === "checkbox" && ((event.kind === "key" && event.phase !== "release" && (event.code === " " || event.code === "Space" || event.code === "Enter")) || (event.kind === "mouse" && event.action === "press"))) {
+    const next = !Boolean(readValue(node.props.checked));
+    const result = node.props.onChange?.(next, node);
+    if (result && result !== "ignored") return result;
+    setValue(node, "checked", next);
+    return "render";
+  }
+  if (node.kind === "select" && event.kind === "key" && event.phase !== "release") {
+    const options = node.props.options ?? [];
+    const direction = event.code === "Up" || event.code === "ArrowUp" || event.code === "Left" || event.code === "ArrowLeft" ? -1 : event.code === "Down" || event.code === "ArrowDown" || event.code === "Right" || event.code === "ArrowRight" ? 1 : 0;
+    if (direction === 0 || options.length === 0) return "ignored";
+    const current = Math.max(0, Math.min(options.length - 1, Math.trunc(Number(readValue(node.props.selectedIndex)) || 0)));
+    const next = findEnabledOption(options, current, direction);
+    const result = node.props.onChange?.(next, node);
+    if (result && result !== "ignored") return result;
+    setValue(node, "selectedIndex", next);
+    return "render";
+  }
+  if (node.kind === "tabs" && event.kind === "key" && event.phase !== "release") {
+    const tabs = node.props.tabs ?? [];
+    if (tabs.length === 0) return "ignored";
+    const direction = event.code === "Left" || event.code === "ArrowLeft" ? -1 : event.code === "Right" || event.code === "ArrowRight" ? 1 : 0;
+    if (direction === 0) return "ignored";
+    const current = Math.max(0, Math.min(tabs.length - 1, Math.trunc(Number(readValue(node.props.activeIndex)) || 0)));
+    const next = (current + direction + tabs.length) % tabs.length;
+    const result = node.props.onChange?.(next, node);
+    if (result && result !== "ignored") return result;
+    setValue(node, "activeIndex", next);
+    return "render";
+  }
+  return "ignored";
+}
+
+function dispatchInput(node: SlateNode, event: SlateEvent): EventResult {
+  if (event.kind === "key" && event.phase === "release") return "ignored";
+  const current = String(readValue(node.props.value ?? node.props.defaultValue ?? ""));
+  const code = event.code ?? event.text ?? "";
+  if (event.kind === "key" && (code === "Enter" || code === "Return")) {
+    const result = node.props.onSubmit?.(current, node);
+    return result && result !== "ignored" ? result : "consumed";
+  }
+  const chars = [...current];
+  let cursor = Math.max(0, Math.min(chars.length, Math.trunc(Number(readValue(node.props.cursor)) || chars.length)));
+  if (event.kind === "paste" || event.kind === "ime" || (event.kind === "key" && code.length === 1 && ((event.modifiers ?? 0) & 6) === 0)) {
+    const insert = event.text ?? code;
+    chars.splice(cursor, 0, ...[...insert]);
+    cursor += [...insert].length;
+    return commitInput(node, chars.join(""), cursor);
+  }
+  if (event.kind !== "key") return "ignored";
+  if (code === "Backspace") {
+    if (cursor === 0) return "consumed";
+    chars.splice(cursor - 1, 1);
+    return commitInput(node, chars.join(""), cursor - 1);
+  }
+  if (code === "Delete") {
+    if (cursor >= chars.length) return "consumed";
+    chars.splice(cursor, 1);
+    return commitInput(node, chars.join(""), cursor);
+  }
+  if (code === "Left" || code === "ArrowLeft") return commitInput(node, current, cursor - 1);
+  if (code === "Right" || code === "ArrowRight") return commitInput(node, current, cursor + 1);
+  if (code === "Home") return commitInput(node, current, 0);
+  if (code === "End") return commitInput(node, current, chars.length);
+  return "ignored";
+}
+
+function commitInput(node: SlateNode, value: string, cursor: number): EventResult {
+  const result = node.props.onChange?.(value, node);
+  if (result && result !== "ignored") return result;
+  if (node.props.value !== undefined && !isWritableSignal(node.props.value)) return "consumed";
+  setValue(node, "value", value);
+  if (node.props.cursor === undefined || isWritableSignal(node.props.cursor)) setValue(node, "cursor", cursor);
+  return "render";
+}
+
+function setValue(node: SlateNode, property: "value" | "cursor" | "checked" | "selectedIndex" | "activeIndex", value: string | boolean | number): void {
+  const current = node.props[property];
+  if (isWritableSignal(current)) current.set(value as never);
+  else node.props = { ...node.props, [property]: value };
+}
+
+function readValue(value: unknown): unknown {
+  return isReadableSignal(value) ? value.get() : value;
+}
+
+function isReadableSignal(value: unknown): value is ReadableSignal<unknown> {
+  return typeof value === "object" && value !== null && (value as ReadableSignal<unknown>).__slateSignal === true && typeof (value as ReadableSignal<unknown>).get === "function";
+}
+
+function isWritableSignal(value: unknown): value is WritableSignal<unknown> {
+  return isReadableSignal(value) && typeof (value as WritableSignal<unknown>).set === "function";
+}
+
+function findEnabledOption(options: readonly SelectOption[], current: number, direction: number): number {
+  for (let step = 1; step <= options.length; step += 1) {
+    const index = (current + direction * step + options.length * 2) % options.length;
+    if (!options[index]?.disabled) return index;
+  }
+  return current;
+}
+
 function pathTo(node: SlateNode, id: ElementId): SlateNode[] | undefined {
   if (node.id === id) return [node];
   for (const child of node.children) {
@@ -332,6 +753,20 @@ function displayWidth(value: string): number {
   }, 0);
 }
 
+function truncateDisplay(value: string, limit: number): string {
+  let width = 0;
+  let result = "";
+  for (const character of [...value]) {
+    const code = character.codePointAt(0) ?? 0;
+    const wide = code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe10 && code <= 0xfe19) || (code >= 0xff01 && code <= 0xff60) || code >= 0x1f300);
+    const characterWidth = wide ? 2 : 1;
+    if (width + characterWidth > limit) break;
+    result += character;
+    width += characterWidth;
+  }
+  return result;
+}
+
 function validate(options: RenderOptions): void {
   for (const key of ["width", "height", "x", "y"] as const) {
     const value = options[key];
@@ -348,12 +783,12 @@ function renderFallback(options: RenderOptions): string {
   const x = options.x ?? 0;
   const y = options.y ?? 0;
   let output = "\x1b[2J\x1b[H\x1b[?25l";
-  const foreground = options.foreground && options.foreground !== "default" ? colorSequence(options.foreground, 38) : "\x1b[39m";
-  const background = options.background && options.background !== "default" ? colorSequence(options.background, 48) : "\x1b[49m";
+  const foreground = options.foreground && options.foreground !== "default" ? colorSequence(hex(options.foreground), 38) : "\x1b[39m";
+  const background = options.background && options.background !== "default" ? colorSequence(hex(options.background), 48) : "\x1b[49m";
   for (let row = 0; row < height; row += 1) {
     const line = lines[row - y] ?? "";
     if (row < y || row - y >= lines.length) continue;
-    output += `\x1b[${row + 1};${x + 1}H${foreground}${background}${[...line].slice(0, Math.max(0, width - x)).join("")}`;
+    output += `\x1b[${row + 1};${x + 1}H${foreground}${background}${truncateDisplay(line, Math.max(0, width - x))}`;
   }
   return `${output}\x1b[0m`;
 }

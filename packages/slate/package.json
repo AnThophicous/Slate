@@ -1,12 +1,13 @@
 {
   "name": "@slate-terminal/core",
-  "version": "1.5.0",
-  "description": "API TypeScript enxuta para interfaces interativas no terminal.",
-  "keywords": ["terminal-ui", "tui", "nodejs", "typescript", "tsx", "ink-alternative", "ansi", "mouse", "keyboard"],
+  "version": "2.0.0",
+  "description": "API TypeScript estável para interfaces de terminal com Node.js, teclado e mouse.",
+  "keywords": ["terminal-ui", "tui", "nodejs", "typescript", "tsx", "ink-alternative", "ansi", "mouse", "keyboard", "interactive-cli", "terminal-components"],
   "repository": { "type": "git", "url": "https://github.com/AnThophicous/Slate.git", "directory": "packages/slate" },
   "homepage": "https://github.com/AnThophicous/Slate/tree/main/packages/slate",
   "bugs": { "url": "https://github.com/AnThophicous/Slate/issues" },
   "license": "Apache-2.0",
+  "engines": { "node": ">=18" },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -28,6 +29,11 @@
     }
   },
   "files": ["dist", "README.md"],
+  "sideEffects": false,
+  "publishConfig": { "access": "public" },
+  "optionalDependencies": {
+    "@slate-terminal/native": "2.0.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",

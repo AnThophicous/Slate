@@ -1,40 +1,36 @@
 # @slate-terminal/react
 
-Camada declarativa opcional da Slate para árvores de componentes, JSX, estado, reconciliação e layout flexível.
-
-## Uso
-
-O pacote não importa React nem Yoga. A camada JSX pode ser usada diretamente com `jsxImportSource`:
-
-```json
-{
-  "compilerOptions": {
-    "jsx": "react-jsx",
-    "jsxImportSource": "@slate-terminal/react"
-  }
-}
-```
+Runtime declarativo TSX da Slate 2.0.0. O pacote não importa React e oferece uma árvore de componentes, reatividade, layout Flexbox, foco, widgets, reconciliação e renderização ANSI.
 
 ```tsx
-import { Button, Container, createSlateRoot } from "@slate-terminal/react";
+import { Button, Container, Input, Text, createTerminalController, render, signal } from "@slate-terminal/react";
+import { createInputSource } from "@slate-terminal/core";
 
-const view = <Container id="app"><Button id="send">Enviar</Button></Container>;
-const root = createSlateRoot();
-const operations = root.render(view);
+const value = signal("");
+const app = render(
+  <Container id="app" direction="column" gap={1}>
+    <Text>Slate Mosaic</Text>
+    <Input id="value" value={value} onChange={next => value.set(next)} />
+    <Button id="save" onPress={() => { process.stdout.write(value.peek()); }}>Salvar</Button>
+  </Container>,
+  { viewport: { width: 80, height: 24 } }
+);
+
+const terminal = createTerminalController(app, createInputSource(), { write: value => process.stdout.write(value) });
+terminal.start();
 ```
 
-## React opcional
+Use `jsxImportSource: "@slate-terminal/react"` com `jsx: "react-jsx"`. Para integrar uma fonte nativa, passe `{ poll: pollEvent }` a `createInputRouter`. O pacote core fornece os controles de raw mode e mouse capture.
 
-`createReactAdapter` recebe um runtime React injetado e converte a árvore Slate em elementos React. O adapter também expõe `hooks.useSlateState` e `hooks.useSlateStore`. Nenhum pacote React é necessário para compilar ou usar o núcleo declarativo.
+Exports principais:
 
-## Layout
+- runtime: `render`, `createApp`, `createSlateApp`, `SlateApplication`, `createTerminalController`;
+- estado: `signal`, `computed`, `effect`, `batch`, `untracked`;
+- layout: `createFlexLayoutEngine`, `createYogaLayoutEngine`;
+- entrada: `createInputRouter`, `useInput`, `useFocus`, `useFocusManager`, `useCursor`, `useWindowSize`;
+- componentes: `Container`, `Block`, `Text`, `Button`, `Input`, `Select`, `Checkbox`, `Tabs`, `Table`, `Spinner`, `Progress`, `Modal`, `ScrollView`, `List`, `Form`, `Glow`, `ColorShift`;
+- infraestrutura: `resolveTree`, `reconcile`, `createSlateRoot`, `renderTreeToAnsi`.
 
-`createFlexLayoutEngine` oferece um layout portátil para row, column, grow, gap, padding, margin e alinhamento. `createYogaLayoutEngine` recebe um objeto compatível com `yoga-layout` por injeção; a aplicação decide quando instalar e carregar essa dependência.
+Todos os callbacks usam o contrato `ignored`, `consumed`, `render` ou `exit`. IDs são únicos por árvore e são usados como identidade estável durante a reconciliação. O controller de terminal conecta entrada, commits e saída ANSI sem impor um runtime de UI.
 
-## Limitações atuais
-
-- O layout portátil cobre um subconjunto intencional de Flexbox e não substitui Yoga em casos avançados.
-- O adapter React converte a árvore para elementos React, mas não instala renderer de terminal nem intercepta eventos automaticamente.
-- Hooks dependem de um runtime de hooks fornecido pela aplicação; chamar hooks fora do ciclo de renderização do runtime é inválido.
-- A reconciliação produz operações declarativas e não aplica essas operações a um backend por conta própria.
-- A medição de texto do layout usa pontos de código Unicode, sem uma tabela completa de largura de glifos do terminal.
+`Glow` e `ColorShift` podem envolver texto ou ser usados como `effect` em qualquer nó. O controller anima efeitos e spinners em até 60 FPS por padrão; use `animationFps: 0` para desativar a agenda automática.

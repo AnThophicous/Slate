@@ -1,3 +1,8 @@
+import { signal } from "./reactive.js";
+
+export { batch, computed, effect, isSignal, readReactive, signal, untracked } from "./reactive.js";
+export type { ReactiveValue, StateAction, Subscriber } from "./reactive.js";
+
 export type SetStateAction<S> = S | ((previous: S) => S);
 export type Dispatch<A> = (action: A) => void;
 export type Reducer<S, A> = (state: S, action: A) => S;
@@ -10,6 +15,12 @@ export interface SlateStore<S> {
   readonly set: Dispatch<SetStateAction<S>>;
   readonly update: Dispatch<SetStateAction<S>>;
   readonly subscribe: (listener: () => void) => () => void;
+}
+
+export type SlateSignal<S> = import("./types.js").WritableSignal<S>;
+
+export function createSlateSignal<S>(initial: S): SlateSignal<S> {
+  return signal(initial);
 }
 
 export interface SlateHookRuntime {

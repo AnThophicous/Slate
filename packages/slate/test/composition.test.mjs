@@ -9,8 +9,10 @@ test("edita nós por ID e roteia eventos ao botão", () => {
   const app = createApp(root);
   assert.equal(app.setText("label", "Confirmar"), true);
   assert.equal(app.setPlaceholder("label", "placeholder"), true);
+  assert.equal(app.edit("label", { text: "Editar" }), true);
   assert.equal(app.dispatch({ kind: "mouse", action: "press", button: "left", x: 0, y: 0 }), "render");
   assert.equal(presses, 1);
+  assert.equal(app.focused(), "button");
   assert.equal(app.focus("button"), true);
   assert.equal(app.dispatch({ kind: "key", code: "Enter" }), "render");
   assert.equal(presses, 2);

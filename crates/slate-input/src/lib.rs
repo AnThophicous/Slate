@@ -1,12 +1,16 @@
 use std::{io, time::Duration};
 
 use crossterm::{
+    cursor::{Hide, Show},
     event::{
         self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
         EnableFocusChange, EnableMouseCapture,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode},
+    terminal::{
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
 };
 use slate_core::{
     Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -55,6 +59,21 @@ impl CrosstermInput {
     }
     pub fn disable_focus_change(&self) -> Result<(), InputError> {
         execute!(io::stdout(), DisableFocusChange).map_err(InputError::from)
+    }
+    pub fn enable_alternate_screen(&self) -> Result<(), InputError> {
+        execute!(io::stdout(), EnterAlternateScreen).map_err(InputError::from)
+    }
+    pub fn disable_alternate_screen(&self) -> Result<(), InputError> {
+        execute!(io::stdout(), LeaveAlternateScreen).map_err(InputError::from)
+    }
+    pub fn clear_screen(&self) -> Result<(), InputError> {
+        execute!(io::stdout(), Clear(ClearType::All)).map_err(InputError::from)
+    }
+    pub fn hide_cursor(&self) -> Result<(), InputError> {
+        execute!(io::stdout(), Hide).map_err(InputError::from)
+    }
+    pub fn show_cursor(&self) -> Result<(), InputError> {
+        execute!(io::stdout(), Show).map_err(InputError::from)
     }
 }
 
@@ -155,8 +174,8 @@ fn convert_button(value: event::MouseButton) -> MouseButton {
 
 fn mouse_delta(value: event::MouseEventKind) -> (i16, i16) {
     match value {
-        event::MouseEventKind::ScrollUp => (0, 1),
-        event::MouseEventKind::ScrollDown => (0, -1),
+        event::MouseEventKind::ScrollUp => (0, -1),
+        event::MouseEventKind::ScrollDown => (0, 1),
         event::MouseEventKind::ScrollLeft => (-1, 0),
         event::MouseEventKind::ScrollRight => (1, 0),
         _ => (0, 0),

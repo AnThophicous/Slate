@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.0.0] - 2026-08-30
+
+### Added
+
+- Slate Mosaic, o modelo de composição por containers, elementos e IDs estáveis.
+- Runtime `render`/`createSlateApp` sem React com mount, unmount, flush, estado e subscriptions.
+- Signals `signal`, `computed`, `effect`, `batch` e `untracked`.
+- Layout Flexbox portátil com row, column, wrap, grow, shrink, gap, porcentagens, min/max, clipping e scroll.
+- Adaptador de layout Yoga por injeção opcional.
+- Widgets Input, Select, Checkbox, Tabs, Table, Spinner, Progress, Modal, ScrollView, List e Form.
+- Foco por Tab/Shift+Tab, hit-test de mouse, paste, IME, cursor, resize e router de entrada.
+- Renderer ANSI TSX com UTF-8 e cores RGB hexadecimais.
+- Efeitos declarativos `Glow` e `ColorShift` por glifo, com agenda de animação do controller.
+- Engine Flexbox equivalente para o núcleo Rust e widgets nativos Input, Select e Checkbox.
+- Exemplos, documentação de API 2.0, migração Ink e benchmark de runtime.
+
+### Compatibility
+
+- A API pública existente da linha 1.x permanece disponível nos pacotes e crates compatíveis.
+- A evolução 2.x segue política aditiva e documentada.
+
 ## [1.5.0] - 2026-08-29
 
 ### Added

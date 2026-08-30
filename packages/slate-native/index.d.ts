@@ -1,3 +1,7 @@
+export declare function clearScreen(): void
+
+export declare function disableAlternateScreen(): void
+
 export declare function disableBracketedPaste(): void
 
 export declare function disableFocusChange(): void
@@ -19,6 +23,8 @@ export interface EffectOptions {
   elapsedMs?: number
 }
 
+export declare function enableAlternateScreen(): void
+
 export declare function enableBracketedPaste(): void
 
 export declare function enableFocusChange(): void
@@ -27,10 +33,13 @@ export declare function enableMouseCapture(): void
 
 export declare function enableRawMode(): void
 
+export declare function hideCursor(): void
+
 export interface NativeEvent {
   kind: string
   code?: string
   text?: string
+  phase?: string
   modifiers: number
   x?: number
   y?: number
@@ -61,5 +70,7 @@ export interface RenderOptions {
 }
 
 export declare function renderText(text: string): string
+
+export declare function showCursor(): void
 
 export declare function version(): string

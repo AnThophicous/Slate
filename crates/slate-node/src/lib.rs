@@ -38,6 +38,7 @@ pub struct NativeEvent {
     pub kind: String,
     pub code: Option<String>,
     pub text: Option<String>,
+    pub phase: Option<String>,
     pub modifiers: u32,
     pub x: Option<u32>,
     pub y: Option<u32>,
@@ -188,6 +189,37 @@ pub fn disable_focus_change() -> Result<()> {
 }
 
 #[napi]
+pub fn enable_alternate_screen() -> Result<()> {
+    CrosstermInput::new()
+        .enable_alternate_screen()
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+#[napi]
+pub fn disable_alternate_screen() -> Result<()> {
+    CrosstermInput::new()
+        .disable_alternate_screen()
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+#[napi]
+pub fn clear_screen() -> Result<()> {
+    CrosstermInput::new()
+        .clear_screen()
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+#[napi]
+pub fn hide_cursor() -> Result<()> {
+    CrosstermInput::new().hide_cursor().map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+#[napi]
+pub fn show_cursor() -> Result<()> {
+    CrosstermInput::new().show_cursor().map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+#[napi]
 pub fn enable_raw_mode() -> Result<()> {
     CrosstermInput::new()
         .enable_raw_mode()
@@ -229,6 +261,7 @@ impl From<Event> for NativeEvent {
             kind: String::new(),
             code: None,
             text: None,
+            phase: None,
             modifiers: 0,
             x: None,
             y: None,
@@ -242,7 +275,12 @@ impl From<Event> for NativeEvent {
         match event {
             Event::Key(key) => {
                 result.kind = "key".into();
-                result.code = Some(key_code(key.code()));
+                let code = key.code();
+                result.code = Some(key_code(code));
+                if let KeyCode::Char(value) = code {
+                    result.text = Some(value.to_string());
+                }
+                result.phase = Some(key_phase(key.kind()).into());
                 result.modifiers = key.modifiers().bits().into();
             }
             Event::Mouse(mouse) => {
@@ -271,6 +309,10 @@ impl From<Event> for NativeEvent {
             }
             Event::Paste(text) => {
                 result.kind = "paste".into();
+                result.text = Some(text);
+            }
+            Event::Ime(text) => {
+                result.kind = "ime".into();
                 result.text = Some(text);
             }
             Event::FocusGained => result.kind = "focusGained".into(),
@@ -311,5 +353,14 @@ fn key_code(code: KeyCode) -> String {
         KeyCode::Char(value) => value.to_string(),
         KeyCode::F(value) => format!("F{value}"),
         other => format!("{other:?}"),
+    }
+}
+
+fn key_phase(kind: slate_core::KeyEventKind) -> &'static str {
+    match kind {
+        slate_core::KeyEventKind::Press => "press",
+        slate_core::KeyEventKind::Repeat => "repeat",
+        slate_core::KeyEventKind::Release => "release",
+        _ => "press",
     }
 }

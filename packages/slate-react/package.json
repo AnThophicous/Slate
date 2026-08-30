@@ -1,12 +1,13 @@
 {
   "name": "@slate-terminal/react",
-  "version": "1.5.0",
-  "description": "Camada declarativa opcional para árvores de componentes Slate.",
-  "keywords": ["terminal-ui", "tui", "react", "jsx", "tsx", "flexbox", "yoga", "hooks", "reconciliation"],
+  "version": "2.0.0",
+  "description": "Runtime declarativo TSX sem React para interfaces interativas de terminal Slate.",
+  "keywords": ["terminal-ui", "tui", "jsx", "tsx", "flexbox", "yoga", "signals", "focus", "widgets", "reconciliation", "ink-alternative"],
   "repository": { "type": "git", "url": "https://github.com/AnThophicous/Slate.git", "directory": "packages/slate-react" },
   "homepage": "https://github.com/AnThophicous/Slate/tree/main/packages/slate-react",
   "bugs": { "url": "https://github.com/AnThophicous/Slate/issues" },
   "license": "Apache-2.0",
+  "engines": { "node": ">=18" },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -30,6 +31,9 @@
   },
   "files": ["dist", "README.md"],
   "sideEffects": false,
+  "dependencies": {
+    "@slate-terminal/core": "2.0.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -37,11 +41,9 @@
     "test": "npm run build && npm run test:typecheck && node --test test/index.test.mjs"
   },
   "peerDependencies": {
-    "react": ">=18",
     "yoga-layout": ">=3"
   },
   "peerDependenciesMeta": {
-    "react": { "optional": true },
     "yoga-layout": { "optional": true }
   },
   "publishConfig": {

@@ -17,6 +17,7 @@ pub enum Event {
     Mouse(MouseEvent),
     Resize(crate::Size),
     Paste(String),
+    Ime(String),
     FocusGained,
     FocusLost,
 }

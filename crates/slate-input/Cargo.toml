@@ -10,5 +10,5 @@ readme = "../../README.md"
 
 [dependencies]
 crossterm.workspace = true
-slate-core = { path = "../slate-core", version = "1.5.0" }
+slate-core = { path = "../slate-core", version = "2.0.0" }
 thiserror.workspace = true

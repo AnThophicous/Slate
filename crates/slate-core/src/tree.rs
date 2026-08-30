@@ -1,4 +1,4 @@
-use crate::{Component, Event, EventResult, Frame, Point, Rect};
+use crate::{Component, Event, EventResult, FlexStyle, Frame, Point, Rect};
 use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -20,6 +20,7 @@ pub struct Element {
     children: Vec<Element>,
     focusable: bool,
     visible: bool,
+    style: FlexStyle,
 }
 
 pub struct ElementEditor<'a> {
@@ -42,6 +43,12 @@ impl<'a> ElementEditor<'a> {
     pub fn set_visible(&mut self, value: bool) {
         self.element.set_visible(value);
     }
+    pub fn style(&self) -> FlexStyle {
+        self.element.style()
+    }
+    pub fn set_style(&mut self, style: FlexStyle) {
+        self.element.set_style(style);
+    }
     pub fn replace_component(&mut self, component: impl Component + 'static) {
         self.element.replace_component(component);
     }
@@ -62,6 +69,7 @@ impl Element {
             children: Vec::new(),
             focusable: false,
             visible: true,
+            style: FlexStyle::default(),
         }
     }
 
@@ -89,6 +97,16 @@ impl Element {
     }
     pub fn set_visible(&mut self, value: bool) {
         self.visible = value;
+    }
+    pub fn style(&self) -> FlexStyle {
+        self.style
+    }
+    pub fn set_style(&mut self, style: FlexStyle) {
+        self.style = style;
+    }
+    pub fn styled(mut self, style: FlexStyle) -> Self {
+        self.style = style;
+        self
     }
     pub fn replace_component(&mut self, component: impl Component + 'static) {
         self.component = Box::new(component);
@@ -251,11 +269,44 @@ impl Container {
     pub const fn focused(&self) -> Option<ElementId> {
         self.focused
     }
+
+    pub fn focus_next(&mut self, reverse: bool) -> Option<ElementId> {
+        let mut ids = Vec::new();
+        collect_focusable(&self.root, &mut ids);
+        if ids.is_empty() {
+            return None;
+        }
+        let current = self.focused.and_then(|focused| ids.iter().position(|id| *id == focused));
+        let next = match (current, reverse) {
+            (Some(index), false) => ids[(index + 1) % ids.len()],
+            (Some(index), true) => ids[(index + ids.len() - 1) % ids.len()],
+            (None, true) => ids[ids.len() - 1],
+            (None, false) => ids[0],
+        };
+        self.focused = Some(next);
+        self.focused
+    }
+
     pub fn dispatch(&mut self, event: &Event) -> EventResult {
+        if let Event::Key(key) = event {
+            if matches!(key.kind(), crate::KeyEventKind::Press | crate::KeyEventKind::Repeat)
+                && key.code() == crate::KeyCode::Tab
+            {
+                self.focus_next(key.modifiers().contains(crate::Modifiers::SHIFT));
+                return EventResult::Consumed;
+            }
+        }
         let mut path = Vec::new();
         if let Event::Mouse(mouse) = event {
             if !self.root.hit_path(mouse.position(), &mut path) {
                 return EventResult::Ignored;
+            }
+            if matches!(mouse.kind(), crate::MouseEventKind::Press(_)) {
+                if let Some(id) =
+                    path.iter().find(|id| self.root.find(**id).is_some_and(Element::is_focusable))
+                {
+                    self.focus(*id);
+                }
             }
         } else if let Some(id) = self.focused {
             if !self.root.path_to(id, &mut path) {
@@ -294,11 +345,24 @@ fn collect_ids(element: &Element, ids: &mut HashSet<ElementId>) -> bool {
     true
 }
 
+fn collect_focusable(element: &Element, ids: &mut Vec<ElementId>) {
+    if !element.is_visible() {
+        return;
+    }
+    if element.is_focusable() {
+        ids.push(element.id());
+    }
+    for child in element.children() {
+        collect_focusable(child, ids);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         Color, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseEventKind, Size, Style,
+        TextBlock,
     };
     use std::cell::Cell;
     use std::rc::Rc;
@@ -321,11 +385,14 @@ mod tests {
             Rect::new(0, 0, 10, 4),
             Probe(parent_hits.clone(), EventResult::Ignored),
         );
-        root.push(Element::new(
-            ElementId::new(2),
-            Rect::new(0, 0, 5, 4),
-            Probe(child_hits.clone(), EventResult::Consumed),
-        ));
+        root.push(
+            Element::new(
+                ElementId::new(2),
+                Rect::new(0, 0, 5, 4),
+                Probe(child_hits.clone(), EventResult::Consumed),
+            )
+            .focusable(true),
+        );
         let mut tree = Container::new(root);
         let event = Event::Mouse(MouseEvent::new(
             Point::new(2, 2),
@@ -335,6 +402,7 @@ mod tests {
         assert_eq!(tree.dispatch(&event), EventResult::Consumed);
         assert_eq!(child_hits.get(), 1);
         assert_eq!(parent_hits.get(), 0);
+        assert_eq!(tree.focused(), Some(ElementId::new(2)));
     }
 
     #[test]
@@ -358,6 +426,29 @@ mod tests {
         let event = Event::Key(KeyEvent::new(KeyCode::Enter, Modifiers::empty()));
         assert_eq!(tree.dispatch(&event), EventResult::Consumed);
         assert_eq!(hits.get(), 1);
+    }
+
+    #[test]
+    fn tab_cycles_focusable_elements() {
+        let mut root =
+            Element::new(ElementId::new(1), Rect::new(0, 0, 10, 4), TextBlock::new("root"));
+        root.push(
+            Element::new(ElementId::new(2), Rect::new(0, 0, 5, 1), TextBlock::new("a"))
+                .focusable(true),
+        );
+        root.push(
+            Element::new(ElementId::new(3), Rect::new(0, 1, 5, 1), TextBlock::new("b"))
+                .focusable(true),
+        );
+        let mut tree = Container::new(root);
+        let tab = Event::Key(KeyEvent::new(KeyCode::Tab, Modifiers::empty()));
+        let reverse_tab = Event::Key(KeyEvent::new(KeyCode::Tab, Modifiers::SHIFT));
+        assert_eq!(tree.dispatch(&tab), EventResult::Consumed);
+        assert_eq!(tree.focused(), Some(ElementId::new(2)));
+        assert_eq!(tree.dispatch(&tab), EventResult::Consumed);
+        assert_eq!(tree.focused(), Some(ElementId::new(3)));
+        assert_eq!(tree.dispatch(&reverse_tab), EventResult::Consumed);
+        assert_eq!(tree.focused(), Some(ElementId::new(2)));
     }
 
     #[test]
