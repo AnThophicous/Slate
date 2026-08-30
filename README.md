@@ -1,5 +1,9 @@
 # Slate
 
+[![CI](https://github.com/AnThophicous/Slate/actions/workflows/ci.yml/badge.svg)](https://github.com/AnThophicous/Slate/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/) [![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
+
+Rust terminal UI toolkit with native Node.js, TypeScript and TSX support.
+
 Slate é uma biblioteca Rust modular para construir interfaces interativas no
 terminal, com adaptadores oficiais para teclado, mouse, ANSI e Node.js/TypeScript.
 A versão atual é **1.5.0 LTS**.

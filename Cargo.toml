@@ -14,6 +14,8 @@ edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
 authors = ["Slate contributors"]
+repository = "https://github.com/AnThophicous/Slate"
+homepage = "https://github.com/AnThophicous/Slate"
 readme = "README.md"
 
 [workspace.dependencies]

@@ -3,6 +3,10 @@
   "version": "1.5.0",
   "private": true,
   "description": "Workspace da biblioteca Slate para interfaces interativas de terminal.",
+  "keywords": ["terminal-ui", "tui", "rust", "nodejs", "typescript", "tsx", "ink-alternative", "mouse", "keyboard"],
+  "repository": { "type": "git", "url": "https://github.com/AnThophicous/Slate.git" },
+  "homepage": "https://github.com/AnThophicous/Slate#readme",
+  "bugs": { "url": "https://github.com/AnThophicous/Slate/issues" },
   "workspaces": ["packages/*"],
   "engines": { "node": ">=18" },
   "scripts": {
