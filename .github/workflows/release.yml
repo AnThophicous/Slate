@@ -69,7 +69,6 @@ jobs:
 
   npm-publish:
     needs: [validate, native]
-    if: ${{ vars.SLATE_PUBLISH_NPM == 'true' }}
     runs-on: ubuntu-latest
     environment: NPM_TOKEN
     steps:
