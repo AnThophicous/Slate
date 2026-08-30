@@ -3,9 +3,10 @@ import { createFocusManager, collectFocusable, hitTest, pathTo, type FocusManage
 import { createFlexLayoutEngine, type LayoutEngine, type LayoutTreeNode, type Viewport } from "./flex.js";
 import { createSlateRoot, reconcile, type ReconcileOperation } from "./reconcile.js";
 import { renderTreeToAnsi, type TerminalRenderOptions } from "./terminal.js";
+import { displayWidth, segmentGraphemes, wrapText } from "./text.js";
 import { resolveTree } from "./vnode.js";
 import type { ComponentTreeNode, ElementId, EventResult, NodeProps, ReadableSignal, SlateChild, SlateEvent } from "./types.js";
-import { uuid } from "./identity.js";
+import { createNormalizedInput, isEmergencyExit, normalizeEvent } from "./input.js";
 
 export interface SlateAppOptions {
   readonly viewport?: Viewport;
@@ -26,11 +27,15 @@ export type SlateInputHandler = (event: SlateEvent, app: SlateApplication<unknow
 
 export interface SlateInputSource {
   readonly poll: (timeoutMs?: number) => SlateEvent | null;
+  /** Releases terminal resources owned by this source, when applicable. */
+  readonly close?: () => void;
 }
 
 export interface SlateInputRouter {
   readonly start: () => void;
   readonly stop: () => void;
+  /** Stops polling, releases the source and closes the attached app. */
+  readonly close: () => void;
   readonly running: () => boolean;
 }
 
@@ -71,6 +76,8 @@ export interface FocusBinding {
 export interface SlateApplication<S> {
   readonly mount: () => readonly ReconcileOperation[];
   readonly unmount: () => readonly ReconcileOperation[];
+  /** Unmounts the Slate tree and clears subscriptions held by the app. */
+  readonly close: () => readonly ReconcileOperation[];
   readonly render: () => readonly ReconcileOperation[];
   readonly flush: () => readonly ReconcileOperation[];
   readonly getTree: () => ComponentTreeNode | null;
@@ -205,10 +212,18 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     removed.clear();
     appended.clear();
     uncontrolledValues.clear();
+    hovered = undefined;
     focusManager.setOrder([]);
     const commit: SlateCommit = { operations, tree, layout, viewport };
     for (const listener of [...listeners]) listener(commit);
     return operations;
+  };
+
+  const close = () => {
+    const result = unmount();
+    listeners.clear();
+    inputListeners.clear();
+    return result;
   };
 
   const setState = (action: S | ((previous: S) => S)) => {
@@ -271,8 +286,9 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   };
 
   const dispatch = (event: SlateEvent): EventResult => {
-    event = event.id ? event : { ...event, id: uuid() };
+    event = normalizeEvent(event);
     if (!mounted) mount();
+    if (isEmergencyExit(event)) return "exit";
     for (const listener of [...inputListeners]) {
       const result = listener(event, app as SlateApplication<unknown>);
       if (isEventResult(result) && result !== "ignored") return finalizeEventResult(result);
@@ -286,16 +302,25 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
         return "consumed";
       }
     }
-    const eventPath = event.kind === "mouse" && tree && layout && event.x !== undefined && event.y !== undefined
-      ? hitTest(tree, layout, event.x, event.y)
+    const pointMouse = event.kind === "mouse" && event.x !== undefined && event.y !== undefined;
+    const mouseX = event.x;
+    const mouseY = event.y;
+    const eventPath = pointMouse && tree && layout && mouseX !== undefined && mouseY !== undefined
+      ? hitTest(tree, layout, mouseX, mouseY)
       : focusedPath();
-    const path = eventPath.length > 0 ? eventPath : tree ? [tree] : [];
+    const path = pointMouse ? eventPath : eventPath.length > 0 ? eventPath : tree ? [tree] : [];
+    if (pointMouse) event = { ...event, target: path[0]?.id };
     if (event.kind === "mouse" && event.action === "move") {
       const nextHovered = path.find(candidate => candidate.props.onHover !== undefined && candidate.props.disabled !== true)?.id;
       if (nextHovered !== hovered) {
+        const previousHovered = hovered;
         hovered = nextHovered;
+        const previous = previousHovered === undefined || !tree ? undefined : findNode(tree, previousHovered);
+        let hoverResult: EventResult = "ignored";
+        if (previous) hoverResult = mergeEventResult(hoverResult, invokeCallback(previous.props.onHover, previous, event) ?? "ignored");
         const target = nextHovered === undefined || !tree ? undefined : findNode(tree, nextHovered);
-        if (target) finalizeEventResult(invokeCallback(target.props.onHover, target, event) ?? "ignored");
+        if (target) hoverResult = mergeEventResult(hoverResult, invokeCallback(target.props.onHover, target, event) ?? "ignored");
+        if (hoverResult !== "ignored") return finalizeEventResult(hoverResult);
       }
     }
     if (event.kind === "mouse" && event.action === "press" && event.button === "left") {
@@ -327,6 +352,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   const app: SlateApplication<S | undefined> = {
     mount,
     unmount,
+    close,
     render: renderNow,
     flush: () => {
       cancelSchedule();
@@ -405,7 +431,10 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   }
 
   function handleNodeEvent(node: ComponentTreeNode, event: SlateEvent): EventResult {
-    if (node.props.disabled === true) return "consumed";
+    // A disabled node is transparent to dispatch: it receives no handlers or
+    // default widget behavior, but an enabled ancestor may still handle the
+    // same hit-tested event.
+    if (node.props.disabled === true) return "ignored";
     const handler = node.props.onEvent;
     if (typeof handler === "function") {
       const result = handler(event, node);
@@ -476,13 +505,13 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     const current = String(readNodeValue(node, "value", node.props.defaultValue ?? ""));
     const code = event.code ?? event.text ?? "";
     if (event.kind === "key" && (code === "Enter" || code === "Return")) return invokeCallback(node.props.onSubmit, node, event, current) ?? "consumed";
-    const chars = [...current];
+    const chars = segmentGraphemes(current);
     let cursor = clampInteger(readNodeValue(node, "cursor", chars.length), chars.length);
-    const insertsText = event.kind === "paste" || event.kind === "ime" || (event.kind === "key" && code.length === 1 && ((event.modifiers ?? 0) & 6) === 0);
+    const insert = segmentGraphemes(event.text ?? (event.kind === "key" ? code : ""));
+    const insertsText = event.kind === "paste" || event.kind === "ime" || (event.kind === "key" && insert.length === 1 && ((event.modifiers ?? 0) & 6) === 0);
     if (insertsText) {
-      const insert = event.text ?? (event.kind === "key" ? code : "");
-      chars.splice(cursor, 0, ...[...insert]);
-      cursor += [...insert].length;
+      chars.splice(cursor, 0, ...insert);
+      cursor += insert.length;
       return commitInput(node, chars.join(""), cursor);
     }
     if (event.kind !== "key") return "ignored";
@@ -648,15 +677,40 @@ export function render<S>(view: SlateChild | ((state: S) => SlateChild), initial
 export const createApp = render;
 
 export function createInputRouter<S>(app: SlateApplication<S>, source: SlateInputSource, intervalMs = 16, onExit?: () => void): SlateInputRouter {
+  let normalizedSource = createNormalizedInput(source);
   let active = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+  let sourceReleased = false;
+  const releaseSource = () => {
+    if (sourceReleased) return;
+    sourceReleased = true;
+    source.close?.();
+  };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    if (timer !== undefined) clearTimeout(timer);
+    active = false;
+    timer = undefined;
+    normalizedSource = createNormalizedInput(source);
+    try {
+      releaseSource();
+    } finally {
+      app.close();
+    }
+  };
   const tick = () => {
     if (!active) return;
-    const event = source.poll(intervalMs);
+    const event = normalizedSource.poll(intervalMs);
     if (event && app.dispatch(event) === "exit") {
       active = false;
       timer = undefined;
-      onExit?.();
+      try {
+        onExit?.();
+      } finally {
+        if (!closed) close();
+      }
       return;
     }
     if (!active) return;
@@ -664,7 +718,8 @@ export function createInputRouter<S>(app: SlateApplication<S>, source: SlateInpu
   };
   return {
     start: () => {
-      if (active) return;
+      if (active || closed) return;
+      sourceReleased = false;
       active = true;
       tick();
     },
@@ -672,6 +727,10 @@ export function createInputRouter<S>(app: SlateApplication<S>, source: SlateInpu
       active = false;
       if (timer !== undefined) clearTimeout(timer);
       timer = undefined;
+      normalizedSource = createNormalizedInput(source);
+    },
+    close: () => {
+      close();
     },
     running: () => active
   };
@@ -683,8 +742,14 @@ export function createTerminalController<S>(app: SlateApplication<S>, source: Sl
   let animationTimer: ReturnType<typeof setTimeout> | undefined;
   let lastFrame: string | undefined;
   let firstFrame = true;
+  let signalHandler: (() => void) | undefined;
+  let closed = false;
   const animationFps = normalizeAnimationFps(options.animationFps);
   const write = () => {
+    // A React root can be created before its first reconciler commit. Do not
+    // turn that transient (or intentionally unmounted) tree into a blank frame
+    // or remount it from inside the commit subscription.
+    if (app.getTree() === null) return;
     const renderOptions = options.render ?? {};
     const frame = app.renderAnsi({ ...renderOptions, clear: renderOptions.clear ?? firstFrame });
     firstFrame = false;
@@ -699,26 +764,53 @@ export function createTerminalController<S>(app: SlateApplication<S>, source: Sl
     unsubscribe = undefined;
     if (animationTimer !== undefined) clearTimeout(animationTimer);
     animationTimer = undefined;
+    removeSignalHandler();
     lastFrame = undefined;
     firstFrame = true;
     if (wasActive) output.write("\u001b[0m\u001b[?25h");
   };
-  router = createInputRouter(app, source, options.intervalMs ?? 16, () => {
+  const close = () => {
+    if (closed) return;
+    closed = true;
     stop();
+    router.close();
+    app.close();
+  };
+  router = createInputRouter(app, source, options.intervalMs ?? 16, () => {
+    close();
     options.onExit?.();
   });
   return {
     start: () => {
-      if (router.running()) return;
+      if (closed || router.running()) return;
       unsubscribe = app.subscribe(write);
       write();
+      installSignalHandler();
       router.start();
       scheduleAnimation();
     },
     stop,
-    dispose: stop,
+    close,
+    dispose: close,
     running: router.running
   };
+
+  function installSignalHandler(): void {
+    if (signalHandler) return;
+    const processLike = nodeProcess();
+    if (!processLike?.on) return;
+    signalHandler = () => {
+      close();
+      options.onExit?.();
+    };
+    processLike.on("SIGINT", signalHandler);
+  }
+
+  function removeSignalHandler(): void {
+    if (!signalHandler) return;
+    nodeProcess()?.removeListener?.("SIGINT", signalHandler);
+    signalHandler = undefined;
+  }
 
   function scheduleAnimation(): void {
     if (animationFps <= 0 || !router.running() || !hasAnimatedContent(app.getTree())) return;
@@ -765,6 +857,16 @@ function normalizeFrameRate(value: number | undefined): number {
   if (value === undefined) return 0;
   if (!Number.isFinite(value) || value < 0) throw new RangeError("frameRate must be a finite non-negative number");
   return value;
+}
+
+interface SignalProcess {
+  readonly on?: (event: string, listener: () => void) => unknown;
+  readonly removeListener?: (event: string, listener: () => void) => unknown;
+}
+
+function nodeProcess(): SignalProcess | undefined {
+  const candidate = (globalThis as typeof globalThis & { process?: unknown }).process;
+  return isRecord(candidate) ? candidate as SignalProcess : undefined;
 }
 
 function normalizeAnimationFps(value: number | undefined): number {
@@ -899,8 +1001,12 @@ function focusedCursor(tree: ComponentTreeNode | null, layout: LayoutTreeNode | 
   if (!node || !target || node.type !== "input") return undefined;
   const value = String(readValue(node.props.value ?? node.props.defaultValue ?? ""));
   const controller = isRecord(node.props.controller) ? node.props.controller : undefined;
-  const cursor = clampInteger(node.props.cursor ?? controller?.cursor, [...value].length);
-  return { x: target.content.x + displayWidth([...value].slice(0, cursor).join("")), y: target.content.y };
+  const graphemes = segmentGraphemes(value);
+  const cursor = clampInteger(node.props.cursor ?? controller?.cursor, graphemes.length);
+  const prefix = graphemes.slice(0, cursor).join("");
+  const lines = wrapText(prefix, target.content.width);
+  const line = lines.at(-1) ?? "";
+  return { x: target.content.x + displayWidth(line), y: target.content.y + lines.length - 1 };
 }
 
 function invokeCallback(value: unknown, node: ComponentTreeNode, event?: SlateEvent, inputValue?: string): EventResult | undefined {
@@ -911,6 +1017,13 @@ function invokeCallback(value: unknown, node: ComponentTreeNode, event?: SlateEv
 
 function isEventResult(value: unknown): value is EventResult {
   return value === "ignored" || value === "consumed" || value === "render" || value === "exit";
+}
+
+function mergeEventResult(current: EventResult, next: EventResult): EventResult {
+  if (current === "exit" || next === "exit") return "exit";
+  if (current === "render" || next === "render") return "render";
+  if (current === "consumed" || next === "consumed") return "consumed";
+  return "ignored";
 }
 
 function isController(value: unknown): value is { readonly handle: (event: SlateEvent) => EventResult } {
@@ -934,16 +1047,6 @@ function isWritable(value: unknown): boolean {
 function clampInteger(value: unknown, fallback: number): number {
   const number = Number(readValue(value));
   return Number.isFinite(number) ? Math.max(0, Math.min(fallback, Math.trunc(number))) : fallback;
-}
-
-function displayWidth(value: string): number {
-  return [...value].reduce((width, character) => {
-    const code = character.codePointAt(0) ?? 0;
-    if ((code >= 0x300 && code <= 0x36f) || (code >= 0xfe00 && code <= 0xfe0f)) return width;
-    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return width;
-    const wide = code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe10 && code <= 0xfe19) || (code >= 0xff01 && code <= 0xff60) || code >= 0x1f300);
-    return width + (wide ? 2 : 1);
-  }, 0);
 }
 
 function activates(event: SlateEvent): boolean {

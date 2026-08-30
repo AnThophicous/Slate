@@ -1,4 +1,5 @@
 import { isSignal, readReactive } from "./reactive.js";
+import { displayWidth, splitLines, wrappedLineCount } from "./text.js";
 import type { ComponentTreeNode, ElementId, FlexDimension, FlexStyle, HostType, Overflow } from "./types.js";
 
 export interface Viewport {
@@ -241,8 +242,8 @@ function layoutAbsolute(node: ComponentTreeNode, content: LayoutRect, clip: Layo
   const bottom = resolveDimension(bottomValue, content.height, 0);
   const widthValue = style.width ?? node.props.width;
   const heightValue = style.height ?? node.props.height;
-  const intrinsicWidth = intrinsicSize(node, "width");
-  const intrinsicHeight = intrinsicSize(node, "height");
+  const intrinsicWidth = intrinsicSize(node, "width", content.width);
+  const intrinsicHeight = intrinsicSize(node, "height", content.width);
   const width = isAuto(widthValue) && !isAuto(leftValue) && !isAuto(rightValue) ? Math.max(0, content.width - left - right) : resolveDimension(widthValue, content.width, intrinsicWidth);
   const height = isAuto(heightValue) && !isAuto(topValue) && !isAuto(bottomValue) ? Math.max(0, content.height - top - bottom) : resolveDimension(heightValue, content.height, intrinsicHeight);
   const minWidth = resolveDimension(style.minWidth ?? node.props.minWidth, content.width, 0);
@@ -279,8 +280,8 @@ function metric(node: ComponentTreeNode, direction: "row" | "column", parentWidt
   const mainValue = direction === "row" ? style.width ?? node.props.width : style.height ?? node.props.height;
   const crossValue = direction === "row" ? style.height ?? node.props.height : style.width ?? node.props.width;
   const basisValue = style.flexBasis;
-  const intrinsicMain = intrinsicSize(node, direction === "row" ? "width" : "height");
-  const intrinsicCross = intrinsicSize(node, direction === "row" ? "height" : "width");
+  const intrinsicMain = intrinsicSize(node, direction === "row" ? "width" : "height", parentWidth);
+  const intrinsicCross = intrinsicSize(node, direction === "row" ? "height" : "width", parentWidth);
   const baseMain = resolveDimension(basisValue, mainBasis, resolveDimension(mainValue, mainBasis, intrinsicMain));
   const explicitCross = isAuto(crossValue) ? undefined : resolveDimension(crossValue, crossBasis, intrinsicCross);
   const baseCross = explicitCross ?? intrinsicCross;
@@ -496,20 +497,39 @@ function snapRect(value: LayoutRect): LayoutRect {
   return { x: Math.round(value.x), y: Math.round(value.y), width: Math.max(0, Math.round(value.width)), height: Math.max(0, Math.round(value.height)) };
 }
 
-function intrinsicSize(node: ComponentTreeNode, axis: "width" | "height"): number {
+function intrinsicSize(node: ComponentTreeNode, axis: "width" | "height", availableWidth = Number.POSITIVE_INFINITY): number {
   const ownText = readText(node);
-  const lines = ownText.split("\n");
-  const own = axis === "width" ? Math.max(1, ...lines.map(displayWidth)) : Math.max(1, lines.length);
+  const lines = splitLines(ownText);
+  const textWidth = textWidthConstraint(node, availableWidth);
+  const own = axis === "width"
+    ? Math.max(1, ...lines.map(displayWidth))
+    : Math.max(1, node.props.wrapText === false ? lines.length : wrappedLineCount(ownText, textWidth));
   if (node.children.length === 0) return own;
   const style = readStyle(node);
   const direction = style.flexDirection ?? "column";
   const children = node.children.filter(renderedNode);
   if (axis === "width") {
-    const childWidth = direction === "row" ? children.reduce((sum, child) => sum + intrinsicSize(child, "width"), 0) : Math.max(0, ...children.map(child => intrinsicSize(child, "width")));
+    const childWidth = direction === "row"
+      ? children.reduce((sum, child) => sum + intrinsicSize(child, "width", availableWidth), 0)
+      : Math.max(0, ...children.map(child => intrinsicSize(child, "width", availableWidth)));
     return Math.max(own, childWidth);
   }
-  const childHeight = direction === "column" ? children.reduce((sum, child) => sum + intrinsicSize(child, "height"), 0) : Math.max(0, ...children.map(child => intrinsicSize(child, "height")));
+  const childHeight = direction === "column"
+    ? children.reduce((sum, child) => sum + intrinsicSize(child, "height", textWidth), 0)
+    : Math.max(0, ...children.map(child => intrinsicSize(child, "height", textWidth)));
   return Math.max(own, childHeight);
+}
+
+function textWidthConstraint(node: ComponentTreeNode, availableWidth: number): number {
+  const style = readStyle(node);
+  const requested = style.width ?? node.props.width;
+  if (requested === "auto" || requested === undefined) return availableWidth;
+  if (typeof requested === "number" && Number.isFinite(requested)) return Math.max(1, requested);
+  if (typeof requested === "string" && requested.endsWith("%") && Number.isFinite(availableWidth)) {
+    const percentage = Number(requested.slice(0, -1));
+    if (Number.isFinite(percentage)) return Math.max(1, availableWidth * percentage / 100);
+  }
+  return availableWidth;
 }
 
 function readText(node: ComponentTreeNode): string {
@@ -518,16 +538,6 @@ function readText(node: ComponentTreeNode): string {
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (isSignal(value)) return String(readReactive(value));
   return "";
-}
-
-function displayWidth(value: string): number {
-  return [...value].reduce((width, character) => {
-    const code = character.codePointAt(0) ?? 0;
-    if ((code >= 0x300 && code <= 0x36f) || (code >= 0xfe00 && code <= 0xfe0f)) return width;
-    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return width;
-    const wide = code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe10 && code <= 0xfe19) || (code >= 0xff01 && code <= 0xff60) || code >= 0x1f300);
-    return width + (wide ? 2 : 1);
-  }, 0);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

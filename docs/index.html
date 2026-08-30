@@ -4,55 +4,174 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="google-site-verification" content="gHvHqcgaODJm4Lo35UEsIIz_r1ZQc8KI8ngd5HuUS0I">
-  <title>Slate 2.0 | Rust Terminal UI for Node.js, TypeScript and TSX</title>
-  <meta name="description" content="Slate 2.0 is a modular Rust terminal UI toolkit with React-free TSX, Flexbox layout, signals, widgets, keyboard, mouse and native Node.js support.">
+  <title>Slate 2.2 | Terminal UI for Node.js, TypeScript and Rust</title>
+  <meta name="description" content="Slate 2.2 is a modular terminal UI toolkit for Rust, Node.js, TypeScript and TSX.">
   <link rel="canonical" href="https://anthophicous.github.io/Slate/">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="Slate 2.0 | Rust Terminal UI Toolkit">
-  <meta property="og:description" content="Build interactive terminal interfaces with Rust, Node.js, TypeScript and TSX without React.">
+  <meta property="og:title" content="Slate 2.2 | Terminal UI Toolkit">
+  <meta property="og:description" content="Build interactive terminal interfaces with Rust, Node.js, TypeScript and TSX.">
   <meta property="og:url" content="https://anthophicous.github.io/Slate/">
   <meta property="og:site_name" content="Slate">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="Slate | Rust Terminal UI Toolkit">
-  <meta name="twitter:description" content="A modular, native and cross-platform terminal UI toolkit.">
+  <meta name="twitter:title" content="Slate 2.2 | Terminal UI Toolkit">
+  <meta name="twitter:description" content="A modular terminal UI toolkit for Rust, Node.js, TypeScript and TSX.">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "SoftwareSourceCode",
     "name": "Slate",
-    "description": "Slate 2.0 modular Rust terminal UI toolkit with native Node.js, TypeScript and TSX support.",
+    "description": "Slate 2.2 modular terminal UI toolkit with native Node.js, TypeScript and TSX support.",
     "codeRepository": "https://github.com/AnThophicous/Slate",
     "programmingLanguage": ["Rust", "TypeScript", "JavaScript"],
     "license": "https://www.apache.org/licenses/LICENSE-2.0",
-    "version": "2.1.0",
+    "version": "2.2.0",
     "runtimePlatform": ["Linux", "Windows", "macOS", "Node.js"]
   }
   </script>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      background: #000;
+      color: #fff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: #000;
+      color: #fff;
+    }
+
+    main {
+      width: min(920px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 72px 0 64px;
+    }
+
+    .frame {
+      border: 1px solid #fff;
+      padding: clamp(24px, 6vw, 64px);
+    }
+
+    .eyebrow {
+      margin: 0 0 24px;
+      font-size: 0.78rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 760px;
+      margin: 0;
+      font-size: clamp(2.4rem, 8vw, 6rem);
+      line-height: 0.95;
+      letter-spacing: -0.08em;
+    }
+
+    .lead {
+      max-width: 680px;
+      margin: 32px 0 0;
+      font-size: clamp(1rem, 2vw, 1.25rem);
+      line-height: 1.7;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 36px 0 0;
+    }
+
+    a {
+      display: inline-block;
+      border: 1px solid #fff;
+      padding: 12px 16px;
+      color: #fff;
+      text-decoration: none;
+    }
+
+    a:hover,
+    a:focus-visible {
+      background: #fff;
+      color: #000;
+      outline: none;
+    }
+
+    .rule {
+      height: 1px;
+      margin: 56px 0 32px;
+      background: #fff;
+      border: 0;
+    }
+
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      background: #fff;
+      border: 1px solid #fff;
+    }
+
+    .features li {
+      min-height: 116px;
+      padding: 20px;
+      background: #000;
+      line-height: 1.6;
+    }
+
+    .prompt {
+      margin: 40px 0 0;
+      padding: 18px 20px;
+      overflow-x: auto;
+      background: #fff;
+      color: #000;
+      line-height: 1.6;
+    }
+
+    footer {
+      margin-top: 24px;
+      font-size: 0.8rem;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 520px) {
+      main { width: min(100% - 20px, 920px); padding: 24px 0; }
+      .frame { padding: 24px 18px; }
+      h1 { font-size: 3.2rem; }
+    }
+  </style>
 </head>
 <body>
   <main>
-    <h1>Slate 2.0: Rust Terminal UI for Node.js, TypeScript and TSX</h1>
-    <p>Slate is a modular terminal user interface toolkit for building interactive command-line applications with React-free TSX, keyboard and mouse input.</p>
-    <p>The library combines a Rust core, Flexbox layout, signals, ready-made widgets, ANSI rendering, native Node.js bindings and the Slate Mosaic component tree.</p>
-    <nav aria-label="Slate resources">
-      <a href="https://github.com/AnThophicous/Slate">GitHub repository</a>
-      <a href="https://github.com/AnThophicous/Slate/blob/main/README.md">Documentation</a>
-      <a href="https://github.com/AnThophicous/Slate/blob/main/docs/ink-migration.md">Ink migration guide</a>
-      <a href="https://github.com/AnThophicous/Slate/blob/main/docs/slate-2.0.md">Slate 2.0 API</a>
-      <a href="https://github.com/AnThophicous/Slate/releases">Releases</a>
-    </nav>
-    <h2>Features</h2>
-    <ul>
-      <li>Rust terminal UI primitives with an additive LTS API.</li>
-      <li>Native Node.js integration for TypeScript and TSX applications.</li>
-      <li>Keyboard, mouse, resize, paste and focus events on Linux, Windows and macOS.</li>
-      <li>Flexbox layout with row, column, grow, shrink, gap, percentages, constraints and scroll.</li>
-      <li>Signals, computed state and selective presentation updates without React.</li>
-      <li>Input, Select, Checkbox, Tabs, Table, Spinner, Progress, Modal, ScrollView, List and Form.</li>
-      <li>Incremental ANSI rendering with duplicate-frame suppression and throttling.</li>
-      <li>Container-based Slate Mosaic trees with stable IDs and runtime editing.</li>
-      <li>Optional smooth Glow and ColorShift effects.</li>
-    </ul>
+    <section class="frame" aria-labelledby="title">
+      <p class="eyebrow">Slate / release 2.2.0</p>
+      <h1 id="title">Terminal interfaces. Kept simple.</h1>
+      <p class="lead">A modular Rust terminal UI toolkit with native Node.js bindings, TypeScript/TSX, Flexbox layout, signals, widgets and reliable keyboard and mouse input.</p>
+
+      <nav class="actions" aria-label="Slate resources">
+        <a href="https://github.com/AnThophicous/Slate">GitHub</a>
+        <a href="https://github.com/AnThophicous/Slate/blob/main/docs/guide.md">Production guide</a>
+        <a href="https://github.com/AnThophicous/Slate/releases">Releases</a>
+      </nav>
+
+      <hr class="rule">
+
+      <ul class="features">
+        <li>Rust core with ANSI rendering and native Node.js support.</li>
+        <li>React-free TSX, optional React 18/19 integration and stable IDs.</li>
+        <li>Keyboard, mouse, resize, paste, focus and emergency Ctrl+C close.</li>
+        <li>Flexbox layout, signals, widgets, multiline text and grapheme-safe wrapping.</li>
+      </ul>
+
+      <p class="prompt">npm install @slate-terminal/core @slate-terminal/react @slate-terminal/native</p>
+      <footer>Apache-2.0 · Linux · Windows · macOS · Node.js 18+</footer>
+    </section>
   </main>
 </body>
 </html>

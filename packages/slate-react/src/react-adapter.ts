@@ -1,6 +1,7 @@
 import type { SlateChild } from "./types.js";
-import { Fragment, resolveTree } from "./vnode.js";
+import { Fragment, createElement, resolveTree } from "./vnode.js";
 import { createSlateHooks, type SlateHookRuntime, type SlateHooks, type SlateStore } from "./state.js";
+import type { NodeProps, SlateComponent } from "./types.js";
 
 export interface ReactRuntime extends SlateHookRuntime {
   readonly createElement: (type: unknown, props: Readonly<Record<string, unknown>> | null, ...children: unknown[]) => unknown;
@@ -10,6 +11,43 @@ export interface ReactRuntime extends SlateHookRuntime {
 export interface ReactAdapterOptions {
   readonly hosts?: Readonly<Record<string, unknown>>;
   readonly fragment?: unknown;
+}
+
+export interface LegacyRendererAdapterOptions {
+  /** Host used when the legacy renderer returns text; defaults to `block`. */
+  readonly type?: "block" | "text" | "container";
+  readonly defaults?: Partial<NodeProps>;
+  /** Maps legacy props to Slate props before the host is created. */
+  readonly mapProps?: (props: NodeProps) => Partial<NodeProps>;
+  /** Return the legacy result directly when it already is a Slate tree. */
+  readonly wrap?: boolean;
+}
+
+export type LegacyRenderer = (props: NodeProps) => SlateChild;
+
+/**
+ * Adapts a renderer written for the pre-Mosaic component contract. The old
+ * renderer keeps owning content generation; Slate adds IDs, layout and event
+ * props around its result.
+ */
+export function adaptLegacyRenderer(renderer: LegacyRenderer | { readonly render: LegacyRenderer }, options: LegacyRendererAdapterOptions = {}): SlateComponent<NodeProps> {
+  const renderLegacy = typeof renderer === "function" ? renderer : renderer.render;
+  return props => {
+    const mapped = options.mapProps?.(props) ?? {};
+    const content = renderLegacy(props);
+    if (options.wrap === false) return content;
+    return createElement<NodeProps>(options.type ?? "block", {
+      ...options.defaults,
+      ...props,
+      ...mapped,
+      children: content
+    });
+  };
+}
+
+/** Descriptive alias for migrations that call their old component a renderer. */
+export function createLegacyRendererAdapter(renderer: LegacyRenderer | { readonly render: LegacyRenderer }, options: LegacyRendererAdapterOptions = {}): SlateComponent<NodeProps> {
+  return adaptLegacyRenderer(renderer, options);
 }
 
 export interface ReactAdapter {

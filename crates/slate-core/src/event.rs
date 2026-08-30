@@ -76,6 +76,9 @@ impl KeyEvent {
     pub const fn kind(self) -> KeyEventKind {
         self.kind
     }
+    pub const fn is_ctrl_c(self) -> bool {
+        matches!(self.code, KeyCode::Char('c' | 'C')) && self.modifiers.contains(Modifiers::CONTROL)
+    }
 }
 
 #[non_exhaustive]

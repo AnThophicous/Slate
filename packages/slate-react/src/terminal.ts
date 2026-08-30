@@ -1,6 +1,7 @@
 import { isSignal } from "./reactive.js";
+import { graphemeWidth, segmentGraphemes, splitLines, wrapText } from "./text.js";
 import { widgetText } from "./widgets.js";
-import type { ComponentTreeNode, EffectSpec } from "./types.js";
+import type { ComponentTreeNode, EffectSpec, TextStyle } from "./types.js";
 import type { LayoutRect, LayoutTreeNode, Viewport } from "./flex.js";
 
 export interface TerminalRenderOptions {
@@ -17,35 +18,81 @@ interface Cell {
   char: string;
   foreground: string | undefined;
   background: string | undefined;
+  bold: boolean | undefined;
+  dim: boolean | undefined;
+  italic: boolean | undefined;
+  underline: boolean | undefined;
+  strikethrough: boolean | undefined;
+  link: string | undefined;
 }
 
 interface TerminalStyle {
   readonly foreground: string | undefined;
   readonly background: string | undefined;
+  readonly bold: boolean | undefined;
+  readonly dim: boolean | undefined;
+  readonly italic: boolean | undefined;
+  readonly underline: boolean | undefined;
+  readonly strikethrough: boolean | undefined;
+  readonly link: string | undefined;
 }
 
 export function renderTreeToAnsi(tree: ComponentTreeNode | null, layout: LayoutTreeNode | null, viewport: Viewport, options: TerminalRenderOptions = {}): string {
   const width = Math.max(0, Math.floor(viewport.width));
   const height = Math.max(0, Math.floor(viewport.height));
-  const cells = Array.from({ length: height }, () => Array.from({ length: width }, () => ({ char: " ", foreground: undefined, background: undefined })) as Cell[]);
+  const cells = Array.from({ length: height }, () => Array.from({ length: width }, () => ({
+    char: " ",
+    foreground: undefined,
+    background: undefined,
+    bold: undefined,
+    dim: undefined,
+    italic: undefined,
+    underline: undefined,
+    strikethrough: undefined,
+    link: undefined
+  })) as Cell[]);
   if (tree && layout) {
-    paint(tree, layout, cells, { x: 0, y: 0, width, height }, { foreground: normalizeHex(options.defaultForeground), background: normalizeHex(options.defaultBackground) }, options.frameIndex ?? 0, undefined);
+    paint(tree, layout, cells, { x: 0, y: 0, width, height }, {
+      foreground: normalizeHex(options.defaultForeground),
+      background: normalizeHex(options.defaultBackground),
+      bold: undefined,
+      dim: undefined,
+      italic: undefined,
+      underline: undefined,
+      strikethrough: undefined,
+      link: undefined
+    }, options.frameIndex ?? 0, undefined);
   }
   const output: string[] = [];
   if (options.clear !== false) output.push("\u001b[2J");
   output.push("\u001b[H");
   if (options.hideCursor !== false) output.push("\u001b[?25l");
   for (const row of cells) {
-    let previous: TerminalStyle = { foreground: undefined, background: undefined };
+    let previous: TerminalStyle = {
+      foreground: undefined,
+      background: undefined,
+      bold: undefined,
+      dim: undefined,
+      italic: undefined,
+      underline: undefined,
+      strikethrough: undefined,
+      link: undefined
+    };
     let line = "";
     for (const cell of row) {
-      if (cell.foreground !== previous.foreground || cell.background !== previous.background) {
-        line += styleCode(cell.foreground, cell.background);
-        previous = { foreground: cell.foreground, background: cell.background };
+      const style = cellStyle(cell);
+      if (cell.link !== previous.link) {
+        if (previous.link !== undefined) line += hyperlinkCode();
+        if (cell.link !== undefined) line += hyperlinkCode(cell.link);
       }
+      if (!sameStyle(style, previous)) {
+        line += styleCode(style);
+      }
+      previous = style;
       line += cell.char;
     }
-    if (previous.foreground !== undefined || previous.background !== undefined) line += "\u001b[0m";
+    if (previous.link !== undefined) line += hyperlinkCode();
+    if (hasStyle(previous)) line += "\u001b[0m";
     output.push(line);
   }
   if (options.restoreCursor) output.push("\u001b[?25h");
@@ -70,13 +117,22 @@ function paint(tree: ComponentTreeNode, layout: LayoutTreeNode, cells: Cell[][],
   if (tree.props.visible === false || (tree.type === "modal" && tree.props.open !== undefined && readValue(tree.props.open) === false) || layout.layout.width < 1 || layout.layout.height < 1) return;
   const clip = layout.clip ? intersect(parentClip, layout.clip) : parentClip;
   if (clip.width < 1 || clip.height < 1) return;
-  const style = {
-    foreground: readColor(tree.props.foreground) ?? inherited.foreground,
-    background: readColor(tree.props.background) ?? inherited.background
+  const textStyle = mergeTextStyle(inherited, tree.props.textStyle);
+  const style: TerminalStyle = {
+    foreground: readColor(tree.props.foreground) ?? textStyle.foreground ?? inherited.foreground,
+    background: readColor(tree.props.background) ?? textStyle.background ?? inherited.background,
+    bold: textStyle.bold ?? inherited.bold,
+    dim: textStyle.dim ?? inherited.dim,
+    italic: textStyle.italic ?? inherited.italic,
+    underline: textStyle.underline ?? inherited.underline,
+    strikethrough: textStyle.strikethrough ?? inherited.strikethrough,
+    link: normalizeLink(tree.props.link) ?? inherited.link
   };
   const effect = readEffect(tree.props.effect) ?? inheritedEffect;
-  fill(cells, layout.layout, clip, style.background, style.foreground);
-  const lines = widgetText(tree, frameIndex);
+  fill(cells, layout.layout, clip, style);
+  const lines = widgetText(tree, frameIndex).flatMap(line => tree.props.wrapText === false
+    ? splitLines(line)
+    : wrapText(line, layout.content.width));
   const origin = layout.content;
   for (let index = 0; index < lines.length; index += 1) {
     drawText(cells, origin.x, origin.y + index, lines[index] ?? "", clip, style, effect, frameIndex, index);
@@ -87,8 +143,8 @@ function paint(tree: ComponentTreeNode, layout: LayoutTreeNode, cells: Cell[][],
   }
 }
 
-function fill(cells: Cell[][], rect: LayoutRect, clip: LayoutRect, background: string | undefined, foreground: string | undefined): void {
-  if (background === undefined && foreground === undefined) return;
+function fill(cells: Cell[][], rect: LayoutRect, clip: LayoutRect, style: TerminalStyle): void {
+  if (!hasStyle(style)) return;
   const bounds = intersect(rect, clip);
   for (let y = bounds.y; y < bounds.y + bounds.height; y += 1) {
     const row = cells[y];
@@ -96,8 +152,7 @@ function fill(cells: Cell[][], rect: LayoutRect, clip: LayoutRect, background: s
     for (let x = bounds.x; x < bounds.x + bounds.width; x += 1) {
       const cell = row[x];
       if (!cell) continue;
-      if (background !== undefined) cell.background = background;
-      if (foreground !== undefined) cell.foreground = foreground;
+      applyStyle(cell, style);
     }
   }
 }
@@ -107,21 +162,28 @@ function drawText(cells: Cell[][], x: number, y: number, text: string, clip: Lay
   let cursor = x;
   const characters = segmentGraphemes(text);
   for (const [characterIndex, character] of characters.entries()) {
-    const width = characterWidth(character);
+    const width = graphemeWidth(character);
     const glyphStyle = effectStyle(style, effect, characterIndex, lineIndex, frameIndex, characters.length);
+    if (width === 0) {
+      const previous = cells[y]?.[cursor - 1];
+      if (previous && previous.char !== "") {
+        previous.char += character;
+        applyStyle(previous, glyphStyle);
+      }
+      continue;
+    }
+    if (cursor + width > clip.x + clip.width) break;
     if (cursor >= clip.x && cursor < clip.x + clip.width && cursor >= 0 && cursor < (cells[y]?.length ?? 0)) {
       const cell = cells[y]?.[cursor];
       if (cell) {
         cell.char = character;
-        cell.foreground = glyphStyle.foreground;
-        cell.background = glyphStyle.background;
+        applyStyle(cell, glyphStyle);
       }
       if (width === 2 && cursor + 1 < clip.x + clip.width && cursor + 1 < (cells[y]?.length ?? 0)) {
         const continuation = cells[y]?.[cursor + 1];
         if (continuation) {
           continuation.char = "";
-          continuation.foreground = glyphStyle.foreground;
-          continuation.background = glyphStyle.background;
+          applyStyle(continuation, glyphStyle);
         }
       }
     }
@@ -160,6 +222,25 @@ function readEffect(value: unknown): EffectSpec | undefined {
   if (resolved.kind === "glow" && typeof resolved.color === "string" && normalizeHex(resolved.color)) return resolved as unknown as EffectSpec;
   if (resolved.kind === "colorShift" && typeof resolved.from === "string" && typeof resolved.to === "string" && normalizeHex(resolved.from) && normalizeHex(resolved.to)) return resolved as unknown as EffectSpec;
   return undefined;
+}
+
+function mergeTextStyle(inherited: TerminalStyle, value: unknown): TextStyle {
+  if (!isRecord(value)) return {
+    bold: inherited.bold,
+    dim: inherited.dim,
+    italic: inherited.italic,
+    underline: inherited.underline,
+    strikethrough: inherited.strikethrough
+  };
+  return {
+    foreground: readColor(value.foreground) ?? inherited.foreground,
+    background: readColor(value.background) ?? inherited.background,
+    bold: typeof value.bold === "boolean" ? value.bold : inherited.bold,
+    dim: typeof value.dim === "boolean" ? value.dim : inherited.dim,
+    italic: typeof value.italic === "boolean" ? value.italic : inherited.italic,
+    underline: typeof value.underline === "boolean" ? value.underline : inherited.underline,
+    strikethrough: typeof value.strikethrough === "boolean" ? value.strikethrough : inherited.strikethrough
+  };
 }
 
 function effectStyle(style: TerminalStyle, effect: EffectSpec | undefined, characterIndex: number, lineIndex: number, frameIndex: number, textLength: number): TerminalStyle {
@@ -204,13 +285,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function styleCode(foreground: string | undefined, background: string | undefined): string {
-  const codes: string[] = [];
-  const foregroundRgb = rgb(foreground);
-  const backgroundRgb = rgb(background);
+function styleCode(style: TerminalStyle): string {
+  const codes: string[] = ["0"];
+  if (style.bold) codes.push("1");
+  if (style.dim) codes.push("2");
+  if (style.italic) codes.push("3");
+  if (style.underline) codes.push("4");
+  if (style.strikethrough) codes.push("9");
+  const foregroundRgb = rgb(style.foreground);
+  const backgroundRgb = rgb(style.background);
   if (foregroundRgb) codes.push(`38;2;${foregroundRgb.join(";")}`);
   if (backgroundRgb) codes.push(`48;2;${backgroundRgb.join(";")}`);
-  return codes.length > 0 ? `\u001b[${codes.join(";")}m` : "\u001b[0m";
+  return `\u001b[${codes.join(";")}m`;
 }
 
 function rgb(value: string | undefined): readonly [number, number, number] | undefined {
@@ -218,17 +304,56 @@ function rgb(value: string | undefined): readonly [number, number, number] | und
   return [Number.parseInt(value.slice(1, 3), 16), Number.parseInt(value.slice(3, 5), 16), Number.parseInt(value.slice(5, 7), 16)];
 }
 
-function characterWidth(value: string): number {
-  const code = value.codePointAt(0) ?? 0;
-  if (code < 0x20 || /^(?:\p{Mark}|\uFE0F|\u200D)/u.test(value)) return 0;
-  if (/\p{Extended_Pictographic}/u.test(value) || [...value].some(char => {
-    const point = char.codePointAt(0) ?? 0;
-    return point >= 0x1100 && (point <= 0x115f || point === 0x2329 || point === 0x232a || (point >= 0x2e80 && point <= 0xa4cf) || (point >= 0xac00 && point <= 0xd7a3) || (point >= 0xf900 && point <= 0xfaff) || (point >= 0xfe10 && point <= 0xfe19) || (point >= 0xff01 && point <= 0xff60));
-  })) return 2;
-  return 1;
+function cellStyle(cell: Cell): TerminalStyle {
+  return {
+    foreground: cell.foreground,
+    background: cell.background,
+    bold: cell.bold,
+    dim: cell.dim,
+    italic: cell.italic,
+    underline: cell.underline,
+    strikethrough: cell.strikethrough,
+    link: cell.link
+  };
 }
 
-function segmentGraphemes(value: string): string[] {
-  const Segmenter = (Intl as typeof Intl & { Segmenter?: new (locale?: string, options?: { granularity: "grapheme" }) => { segment(input: string): Iterable<{ segment: string }> } }).Segmenter;
-  return Segmenter ? [...new Segmenter(undefined, { granularity: "grapheme" }).segment(value)].map(item => item.segment) : [...value];
+function applyStyle(cell: Cell, style: TerminalStyle): void {
+  if (style.foreground !== undefined) cell.foreground = style.foreground;
+  if (style.background !== undefined) cell.background = style.background;
+  if (style.bold !== undefined) cell.bold = style.bold;
+  if (style.dim !== undefined) cell.dim = style.dim;
+  if (style.italic !== undefined) cell.italic = style.italic;
+  if (style.underline !== undefined) cell.underline = style.underline;
+  if (style.strikethrough !== undefined) cell.strikethrough = style.strikethrough;
+  if (style.link !== undefined) cell.link = style.link;
+}
+
+function sameStyle(left: TerminalStyle, right: TerminalStyle): boolean {
+  return left.foreground === right.foreground
+    && left.background === right.background
+    && left.bold === right.bold
+    && left.dim === right.dim
+    && left.italic === right.italic
+    && left.underline === right.underline
+    && left.strikethrough === right.strikethrough
+    && left.link === right.link;
+}
+
+function hasStyle(style: TerminalStyle): boolean {
+  return style.foreground !== undefined
+    || style.background !== undefined
+    || style.bold !== undefined
+    || style.dim !== undefined
+    || style.italic !== undefined
+    || style.underline !== undefined
+    || style.strikethrough !== undefined;
+}
+
+function normalizeLink(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || /[\u0000-\u001f\u007f]/u.test(value)) return undefined;
+  return value;
+}
+
+function hyperlinkCode(url?: string): string {
+  return url === undefined ? "\u001b]8;;\u001b\\" : `\u001b]8;;${url}\u001b\\`;
 }

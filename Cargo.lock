@@ -454,22 +454,23 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slate-core"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "bitflags",
+ "unicode-segmentation",
  "unicode-width",
 ]
 
 [[package]]
 name = "slate-effects"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "slate-core",
 ]
 
 [[package]]
 name = "slate-input"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "crossterm",
  "slate-core",
@@ -478,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "slate-node"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -492,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "slate-renderer"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "slate-core",
  "unicode-width",

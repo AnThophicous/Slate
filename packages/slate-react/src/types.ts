@@ -83,6 +83,36 @@ export interface ColorShiftEffect {
 
 export type EffectSpec = GlowEffect | ColorShiftEffect;
 
+/** Terminal attributes applied to text runs and log lines. */
+export interface TextStyle {
+  readonly foreground?: string;
+  readonly background?: string;
+  readonly bold?: boolean;
+  readonly dim?: boolean;
+  readonly italic?: boolean;
+  readonly underline?: boolean;
+  readonly strikethrough?: boolean;
+}
+
+export interface LogRun {
+  readonly text: string;
+  readonly style?: TextStyle;
+  readonly link?: string;
+}
+
+/** A log line may be plain text or a sequence of styled/linkable runs. */
+export interface LogLine {
+  readonly id?: ElementId;
+  readonly text?: string;
+  readonly style?: TextStyle;
+  readonly link?: string;
+  readonly runs?: readonly LogRun[];
+  /** `spans` is an alias for `runs`, useful when adapting existing log data. */
+  readonly spans?: readonly LogRun[];
+}
+
+export type LogLineValue = string | LogLine;
+
 export interface SlateEvent {
   /** Unique identity assigned by Slate at dispatch boundaries. */
   readonly id?: string;
@@ -99,6 +129,8 @@ export interface SlateEvent {
   readonly button?: "left" | "right" | "middle" | "other";
   readonly deltaX?: number;
   readonly deltaY?: number;
+  /** Topmost element found by hit-test for mouse events. */
+  readonly target?: ElementId;
 }
 
 export interface SelectOption {
@@ -168,6 +200,9 @@ export interface NodeProps {
   readonly text?: SignalValue<string>;
   readonly placeholder?: SignalValue<string>;
   readonly label?: SignalValue<string>;
+  readonly wrapText?: boolean;
+  readonly textStyle?: TextStyle;
+  readonly link?: string;
   readonly value?: SignalValue<string | number | boolean>;
   readonly defaultValue?: string | number | boolean;
   readonly options?: readonly SelectOption[];

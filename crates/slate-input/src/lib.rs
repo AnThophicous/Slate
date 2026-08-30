@@ -75,6 +75,29 @@ impl CrosstermInput {
     pub fn show_cursor(&self) -> Result<(), InputError> {
         execute!(io::stdout(), Show).map_err(InputError::from)
     }
+
+    /// Restores every terminal mode that Slate can enable.
+    ///
+    /// Cleanup is best-effort: all modes are attempted and the first I/O
+    /// error is returned after the terminal has had a chance to recover.
+    pub fn close(&self) -> Result<(), InputError> {
+        let mut first_error = None;
+        for result in [
+            self.show_cursor(),
+            self.disable_focus_change(),
+            self.disable_bracketed_paste(),
+            self.disable_mouse_capture(),
+            self.disable_raw_mode(),
+            self.disable_alternate_screen(),
+        ] {
+            if let Err(error) = result {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
 }
 
 impl EventSource for CrosstermInput {

@@ -1,4 +1,5 @@
 import { isSignal, readReactive, signal } from "./reactive.js";
+import { segmentGraphemes } from "./text.js";
 import { createElement } from "./vnode.js";
 import type { ComponentTreeNode, EventResult, NodeProps, SelectOption, SlateEvent, SlateProps, SlateVNode, WritableSignal } from "./types.js";
 
@@ -118,23 +119,23 @@ export function ColorShift(props: ColorShiftProps): SlateVNode {
 
 export function createInputController(initial = ""): InputController {
   const value = signal(initial);
-  const cursor = signal([...initial].length);
+  const cursor = signal(segmentGraphemes(initial).length);
   const setText = (text: string, position: number) => {
     value.set(text);
-    cursor.set(Math.max(0, Math.min([...text].length, position)));
+    cursor.set(Math.max(0, Math.min(segmentGraphemes(text).length, position)));
   };
   const handle = (event: SlateEvent): EventResult => {
     if (event.kind === "paste" || event.kind === "ime") {
-      const insert = event.text ?? "";
-      const chars = [...value.peek()];
+      const insert = segmentGraphemes(event.text ?? "");
+      const chars = segmentGraphemes(value.peek());
       const index = cursor.peek();
-      chars.splice(index, 0, ...[...insert]);
-      setText(chars.join(""), index + [...insert].length);
+      chars.splice(index, 0, ...insert);
+      setText(chars.join(""), index + insert.length);
       return "render";
     }
     if (event.kind !== "key" || (event.code === undefined && event.text === undefined)) return "ignored";
     const code = event.code ?? event.text ?? "";
-    const chars = [...value.peek()];
+    const chars = segmentGraphemes(value.peek());
     const index = cursor.peek();
     if (code === "Backspace") {
       if (index === 0) return "consumed";
@@ -164,9 +165,10 @@ export function createInputController(initial = ""): InputController {
       cursor.set(chars.length);
       return "render";
     }
-    if (code.length !== 1 || ((event.modifiers ?? 0) & 6) !== 0) return "ignored";
-    chars.splice(index, 0, code);
-    setText(chars.join(""), index + 1);
+    const insert = segmentGraphemes(code);
+    if (insert.length !== 1 || ((event.modifiers ?? 0) & 6) !== 0) return "ignored";
+    chars.splice(index, 0, ...insert);
+    setText(chars.join(""), index + insert.length);
     return "render";
   };
   return { value, cursor, handle };

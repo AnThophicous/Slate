@@ -1,7 +1,7 @@
 use slate_core::{Attributes, Color, Frame, Point, Style};
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 pub trait Renderer {
     fn render(&mut self, frame: &Frame) -> io::Result<()>;
@@ -124,8 +124,10 @@ impl<W: Write> AnsiRenderer<W> {
                     continue;
                 }
                 write_style_if_changed(&mut self.writer, &mut previous_style, cell.style())?;
-                write!(self.writer, "{}", cell.symbol())?;
-                x = x.saturating_add(cell_width(cell.symbol()));
+                let grapheme =
+                    frame.grapheme(Point::new(x, y)).expect("frame coordinates are valid");
+                write!(self.writer, "{}", grapheme)?;
+                x = x.saturating_add(UnicodeWidthStr::width(grapheme.as_ref()).max(1) as u16);
             }
         }
         write!(self.writer, "\x1b[0m")
@@ -140,13 +142,14 @@ impl<W: Write> AnsiRenderer<W> {
                 if current == old || current.is_continuation() {
                     continue;
                 }
+                let grapheme = frame.grapheme(point).expect("frame coordinates are valid");
                 write!(
                     self.writer,
                     "\x1b[{};{}H{}{}",
                     y + 1,
                     x + 1,
                     style_to_ansi(current.style()),
-                    current.symbol()
+                    grapheme
                 )?;
             }
         }
@@ -174,10 +177,6 @@ fn write_style_if_changed<W: Write>(
         *previous = Some(style);
     }
     Ok(())
-}
-
-fn cell_width(symbol: char) -> u16 {
-    UnicodeWidthChar::width(symbol).unwrap_or(1).max(1) as u16
 }
 
 pub fn render_to_ansi(frame: &Frame) -> String {
@@ -251,6 +250,14 @@ mod tests {
         frame.write_text(Point::new(0, 0), "Olá", Style::default());
         let output = render_to_ansi(&frame);
         assert!(output.contains("Olá"));
+    }
+
+    #[test]
+    fn renders_complete_graphemes_as_ansi() {
+        let mut frame = Frame::new(Size::new(4, 1));
+        frame.write_text(Point::new(0, 0), "a👩‍💻b", Style::default());
+        let output = render_to_ansi(&frame);
+        assert!(output.contains("a👩‍💻b"));
     }
 
     #[test]

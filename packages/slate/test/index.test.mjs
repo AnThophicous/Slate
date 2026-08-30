@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { VERSION, Button, Container, Input, computed, createApp, createInkAdapter, effect, hex, renderText, signal } from "../dist/index.js";
+import { VERSION, Button, Container, Input, computed, createApp, createInkAdapter, createLegacyRendererAdapter, effect, hex, renderText, signal } from "../dist/index.js";
 
 test("expõe a versão LTS e renderiza texto", () => {
-  assert.equal(VERSION, "2.1.0");
+  assert.equal(VERSION, "2.2.0");
   assert.match(renderText("Slate"), /Slate/);
 });
 
@@ -16,6 +16,16 @@ test("valida cores hex e preserva UTF-8", () => {
 test("oferece adaptador compatível com composição do Ink", () => {
   const render = createInkAdapter({ foreground: "#123456" });
   assert.match(render("Slate"), /Slate/);
+});
+
+test("oferece adaptador oficial para renderer textual legado", () => {
+  const legacy = createLegacyRendererAdapter((text, options) => `${options?.foreground ?? "plain"}:${text}`, { foreground: "#abc" });
+  assert.equal(legacy("Slate"), "#abc:Slate");
+});
+
+test("Ctrl+C retorna exit no app imperativo", () => {
+  const app = createApp(Container({ id: "root", children: "Slate" }));
+  assert.equal(app.dispatch({ kind: "key", code: "c", modifiers: 2 }), "exit");
 });
 
 test("expõe sinais, widgets e navegação de foco no core", () => {

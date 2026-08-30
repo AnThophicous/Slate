@@ -9,19 +9,35 @@ export interface TerminalOptions extends TerminalControllerOptions {
   readonly output: SlateOutput;
 }
 
+export interface ReactTerminalSession extends ReactTerminalRoot {
+  readonly terminal?: SlateTerminalController;
+}
+
 /** High-level terminal lifecycle facade for React and native Slate apps. */
 export function createTerminal<S>(app: SlateApplication<S>, options: TerminalOptions): SlateTerminalController {
   return createTerminalController(app, options.input, options.output, options);
 }
 
 /** Mounts a real React element and optionally wires terminal input/output. */
-export async function renderReact(element: unknown, options: SlateAppOptions & Partial<TerminalOptions> = {}): Promise<ReactTerminalRoot> {
+export async function renderReact(element: unknown, options: SlateAppOptions & Partial<TerminalOptions> = {}): Promise<ReactTerminalSession> {
   const root = await createReactTerminalRoot(options);
+  // Let React commit before the terminal controller writes its first frame.
+  // Starting the controller first used to expose the reconciler's transient
+  // empty container as a visible blank screen.
+  root.render(element);
+  await Promise.resolve();
   if (options.input && options.output) {
     const terminal = createTerminal(root.app, options as TerminalOptions);
     terminal.start();
+    return {
+      ...root,
+      terminal,
+      close: () => {
+        terminal.close();
+        root.close();
+      }
+    };
   }
-  root.render(element);
   return root;
 }
 

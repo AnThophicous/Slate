@@ -1,4 +1,7 @@
-use unicode_width::UnicodeWidthChar;
+use std::borrow::Cow;
+
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::{Point, Rect, Size, Style};
 
@@ -37,14 +40,13 @@ impl Default for Cell {
 pub struct Frame {
     size: Size,
     cells: Vec<Cell>,
+    graphemes: Vec<String>,
 }
 
 impl Frame {
     pub fn new(size: Size) -> Self {
-        Self {
-            size,
-            cells: vec![Cell::default(); usize::from(size.width()) * usize::from(size.height())],
-        }
+        let area = usize::from(size.width()) * usize::from(size.height());
+        Self { size, cells: vec![Cell::default(); area], graphemes: vec![" ".to_owned(); area] }
     }
     pub const fn size(&self) -> Size {
         self.size
@@ -54,6 +56,7 @@ impl Frame {
     }
     pub fn clear(&mut self, style: Style) {
         self.cells.fill(Cell::new(' ', style));
+        self.graphemes.fill(" ".to_owned());
     }
     pub fn cells(&self) -> &[Cell] {
         &self.cells
@@ -63,26 +66,78 @@ impl Frame {
     }
 
     pub fn set(&mut self, point: Point, cell: Cell) -> bool {
-        self.index(point).map(|index| self.cells[index] = cell).is_some()
+        let Some(index) = self.index(point) else { return false };
+        self.cells[index] = cell;
+        self.graphemes[index] =
+            if cell.is_continuation() { String::new() } else { cell.symbol().to_string() };
+        true
     }
 
     pub fn get(&self, point: Point) -> Option<Cell> {
         self.index(point).map(|index| self.cells[index])
     }
 
+    /// Returns the complete grapheme stored at a cell's leading position.
+    /// Continuation cells return an empty string.
+    pub fn grapheme(&self, point: Point) -> Option<Cow<'_, str>> {
+        let index = self.index(point)?;
+        let cell = self.cells[index];
+        if cell.is_continuation() {
+            return Some(Cow::Borrowed(""));
+        }
+        let grapheme = &self.graphemes[index];
+        if grapheme.starts_with(cell.symbol()) {
+            Some(Cow::Borrowed(grapheme))
+        } else {
+            Some(Cow::Owned(cell.symbol().to_string()))
+        }
+    }
+
+    /// Writes one complete grapheme and reserves all of its terminal cells.
+    pub fn set_grapheme(&mut self, point: Point, grapheme: &str, style: Style) -> bool {
+        let Some(character) = grapheme.chars().next() else { return false };
+        let width = UnicodeWidthStr::width(grapheme).max(1) as u16;
+        if point.x().saturating_add(width) > self.size.width() {
+            return false;
+        }
+        let Some(index) = self.index(point) else { return false };
+        self.cells[index] = Cell::new(character, style);
+        self.graphemes[index] = grapheme.to_owned();
+        for offset in 1..width {
+            let continuation = Point::new(point.x().saturating_add(offset), point.y());
+            let Some(continuation_index) = self.index(continuation) else { return false };
+            self.cells[continuation_index] = Cell::continuation(style);
+            self.graphemes[continuation_index].clear();
+        }
+        if width == 1 {
+            let next = Point::new(point.x().saturating_add(1), point.y());
+            if self.get(next).is_some_and(Cell::is_continuation) {
+                self.set(next, Cell::default());
+            }
+        }
+        true
+    }
+
     pub fn write_text(&mut self, origin: Point, text: &str, style: Style) {
         let mut x = origin.x();
         let mut y = origin.y();
-        for character in text.chars() {
-            if character == '\n' {
+        for grapheme in text.graphemes(true) {
+            if grapheme == "\n" {
                 y = y.saturating_add(1);
                 x = origin.x();
                 continue;
             }
-            if character == '\r' {
+            if grapheme == "\r" {
                 continue;
             }
-            let width = UnicodeWidthChar::width(character).unwrap_or(1).max(1) as u16;
+            if grapheme.is_empty() {
+                continue;
+            }
+            let width = UnicodeWidthStr::width(grapheme).max(1) as u16;
+            if x.saturating_add(width) > self.size.width() && x != origin.x() {
+                y = y.saturating_add(1);
+                x = origin.x();
+            }
             if x.saturating_add(width) > self.size.width() {
                 break;
             }
@@ -95,10 +150,7 @@ impl Frame {
             {
                 self.set(Point::new(x.saturating_add(1), y), Cell::default());
             }
-            self.set(Point::new(x, y), Cell::new(character, style));
-            if width == 2 {
-                self.set(Point::new(x.saturating_add(1), y), Cell::continuation(style));
-            }
+            self.set_grapheme(Point::new(x, y), grapheme, style);
             x = x.saturating_add(width);
         }
     }
@@ -108,5 +160,29 @@ impl Frame {
             return None;
         }
         Some(usize::from(point.y()) * usize::from(self.size.width()) + usize::from(point.x()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_complete_graphemes() {
+        let mut frame = Frame::new(Size::new(4, 1));
+        frame.write_text(Point::new(0, 0), "a👩‍💻b", Style::default());
+        assert_eq!(frame.grapheme(Point::new(1, 0)).expect("grapheme").as_ref(), "👩‍💻");
+        assert!(frame.get(Point::new(2, 0)).expect("cell").is_continuation());
+    }
+
+    #[test]
+    fn wraps_and_preserves_explicit_newlines() {
+        let mut frame = Frame::new(Size::new(3, 3));
+        frame.write_text(Point::new(0, 0), "abcd\nef", Style::default());
+        assert_eq!(frame.get(Point::new(0, 0)).expect("cell").symbol(), 'a');
+        assert_eq!(frame.get(Point::new(2, 0)).expect("cell").symbol(), 'c');
+        assert_eq!(frame.get(Point::new(0, 1)).expect("cell").symbol(), 'd');
+        assert_eq!(frame.get(Point::new(0, 2)).expect("cell").symbol(), 'e');
+        assert_eq!(frame.get(Point::new(1, 2)).expect("cell").symbol(), 'f');
     }
 }

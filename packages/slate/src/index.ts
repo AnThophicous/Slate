@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-export const VERSION = "2.1.0" as const;
+export const VERSION = "2.2.0" as const;
 
 export type ElementId = string | number;
 export type Color = "default" | `#${string}`;
@@ -158,6 +158,7 @@ export interface SlateEvent {
   readonly button?: "left" | "right" | "middle" | "other";
   readonly deltaX?: number;
   readonly deltaY?: number;
+  readonly target?: ElementId;
 }
 
 export interface FlexStyle {
@@ -220,6 +221,7 @@ export interface NodeProps {
   readonly width?: number;
   readonly height?: number;
   readonly visible?: boolean;
+  readonly disabled?: boolean;
   readonly focusable?: boolean;
   readonly foreground?: Color;
   readonly background?: Color;
@@ -245,6 +247,7 @@ export interface NodeProps {
   readonly text?: string;
   readonly placeholder?: string;
   readonly label?: string;
+  readonly onHover?: EventHandler;
   readonly value?: string | number | boolean | ReadableSignal<string | number | boolean>;
   readonly defaultValue?: string | number | boolean;
   readonly options?: readonly SelectOption[];
@@ -303,6 +306,7 @@ interface NativeBinding {
   clearScreen?(): void;
   hideCursor?(): void;
   showCursor?(): void;
+  closeTerminal?(): void;
   pollEvent?(timeoutMs?: number): SlateEvent | null;
 }
 
@@ -363,10 +367,17 @@ export function hex(value: string): Color {
   throw new TypeError("cor deve usar #RGB ou #RRGGBB");
 }
 
+export type LegacyTextRenderer = (text: string, options?: Omit<RenderOptions, "text">) => string;
+
+/** Keeps old `(text, options) => ANSI` renderers usable during migration. */
+export function createLegacyRendererAdapter(renderer: LegacyTextRenderer = renderText, defaults: Omit<RenderOptions, "text"> = {}): LegacyTextRenderer {
+  return (text, options = {}) => renderer(text, { ...defaults, ...options });
+}
+
 export function inkRender(text: string, options: Omit<RenderOptions, "text"> = {}): string { return renderText(text, options); }
 
 export function createInkAdapter(defaults: Omit<RenderOptions, "text"> = {}) {
-  return (text: string, options: Omit<RenderOptions, "text"> = {}) => renderText(text, { ...defaults, ...options });
+  return createLegacyRendererAdapter(renderText, defaults);
 }
 
 export function enableMouseCapture(): void {
@@ -404,8 +415,12 @@ export function disableAlternateScreen(): void { native()?.disableAlternateScree
 export function clearScreen(): void { native()?.clearScreen?.(); }
 export function hideCursor(): void { native()?.hideCursor?.(); }
 export function showCursor(): void { native()?.showCursor?.(); }
+/** Restores cursor, raw mode, mouse/paste/focus capture and alternate screen. */
+export function closeTerminal(): void { native()?.closeTerminal?.(); }
 export function pollEvent(timeoutMs = 16): SlateEvent | null { return native()?.pollEvent?.(timeoutMs) ?? null; }
-export function createInputSource(): { readonly poll: (timeoutMs?: number) => SlateEvent | null } { return { poll: pollEvent }; }
+export function createInputSource(): { readonly poll: (timeoutMs?: number) => SlateEvent | null; readonly close: () => void } {
+  return { poll: pollEvent, close: closeTerminal };
+}
 
 export function createContainer(props: NodeProps = {}): SlateNode { return createNode("container", props); }
 export function createBlock(props: NodeProps = {}): SlateNode { return createNode("block", props); }
@@ -448,6 +463,7 @@ export function renderNode(node: SlateNode, options: Omit<RenderOptions, "text">
 export class SlateApp<S = unknown> {
   readonly root: SlateNode;
   private focusedId: ElementId | undefined;
+  private hoveredId: ElementId | undefined;
   private stateValue: S | undefined;
   private readonly stateListeners = new Set<() => void>();
 
@@ -467,7 +483,7 @@ export class SlateApp<S = unknown> {
   find(id: ElementId): SlateNode | undefined { return findNode(this.root, id); }
   focus(id: ElementId): boolean {
     const node = this.find(id);
-    if (!node?.props.focusable) return false;
+    if (!node?.props.focusable || node.props.disabled === true) return false;
     if (this.focusedId === id) return true;
     const previous = this.focusedId;
     this.focusedId = id;
@@ -527,22 +543,44 @@ export class SlateApp<S = unknown> {
     if (index < 0) return undefined;
     const [removed] = parent.children.splice(index, 1);
     if (this.focusedId !== undefined && !this.find(this.focusedId)) this.focusedId = undefined;
+    if (this.hoveredId !== undefined && !this.find(this.hoveredId)) this.hoveredId = undefined;
     return removed;
   }
   setText(id: ElementId, text: string): boolean { return this.update(id, { text }); }
   setPlaceholder(id: ElementId, placeholder: string): boolean { return this.update(id, { placeholder }); }
   setForeground(id: ElementId, foreground: Color): boolean { return this.update(id, { foreground: foreground === "default" ? foreground : hex(foreground) }); }
   dispatch(event: SlateEvent): EventResult {
+    if (event.kind === "key" && event.phase !== "release" && isCtrlC(event)) return "exit";
     if (event.kind === "key" && event.phase !== "release" && event.code === "Tab") {
       this.focusNext((event.modifiers ?? 0) & 1 ? true : false);
       return "consumed";
     }
-    const path = event.kind === "mouse" && event.x !== undefined && event.y !== undefined ? hitPath(this.root, event.x, event.y) : this.focusedId === undefined ? [this.root] : pathTo(this.root, this.focusedId) ?? [this.root];
+    const pointMouse = event.kind === "mouse" && event.x !== undefined && event.y !== undefined;
+    const mouseX = event.x;
+    const mouseY = event.y;
+    const path = pointMouse && mouseX !== undefined && mouseY !== undefined ? hitPath(this.root, mouseX, mouseY) : this.focusedId === undefined ? [this.root] : pathTo(this.root, this.focusedId) ?? [this.root];
+    if (pointMouse) event = { ...event, target: path[0]?.id };
     if (event.kind === "mouse" && event.action === "press") {
-      const target = path.find(node => node.props.focusable === true);
+      const target = path.find(node => node.props.focusable === true && node.props.disabled !== true);
       if (target) this.focus(target.id);
     }
+    if (event.kind === "mouse" && event.action === "move") {
+      const nextHovered = path.find(node => node.props.onHover !== undefined && node.props.disabled !== true)?.id;
+      if (nextHovered !== this.hoveredId) {
+        const previousHovered = this.hoveredId;
+        this.hoveredId = nextHovered;
+        let hoverResult: EventResult = "ignored";
+        for (const id of [previousHovered, nextHovered]) {
+          if (id === undefined) continue;
+          const node = this.find(id);
+          const result = node?.props.onHover?.(event, node);
+          if (result && result !== "ignored") hoverResult = result;
+        }
+        if (hoverResult !== "ignored") return hoverResult;
+      }
+    }
     for (const node of path) {
+      if (node.props.disabled === true) continue;
       const result = node.props.onEvent?.(event, node);
       if (result && result !== "ignored") return result;
       const specific = event.kind === "key" ? node.props.onKey : event.kind === "mouse" ? node.props.onMouse : event.kind === "paste" ? node.props.onPaste : event.kind === "resize" ? node.props.onResize : event.kind === "ime" ? node.props.onIme : undefined;
@@ -560,6 +598,14 @@ export class SlateApp<S = unknown> {
     return "ignored";
   }
   render(options: Omit<RenderOptions, "text"> = {}): string { return renderNode(this.root, options); }
+}
+
+function isCtrlC(event: SlateEvent): boolean {
+  if ((event.modifiers ?? 0) & 2) {
+    const code = String(event.code ?? event.text ?? "").toLowerCase();
+    return code === "c" || code === "keyc" || code === "ctrl+c";
+  }
+  return false;
 }
 
 export function createApp<S = unknown>(root: SlateNode, initialState?: S): SlateApp<S> { return new SlateApp(root, initialState); }
@@ -627,7 +673,7 @@ function hitPath(node: SlateNode, x: number, y: number): SlateNode[] {
 
 function focusableIds(node: SlateNode): ElementId[] {
   if (node.props.visible === false) return [];
-  return [node.props.focusable ? node.id : undefined, ...node.children.flatMap(focusableIds)].filter((id): id is ElementId => id !== undefined);
+  return [node.props.focusable && node.props.disabled !== true ? node.id : undefined, ...node.children.flatMap(focusableIds)].filter((id): id is ElementId => id !== undefined);
 }
 
 function dispatchWidget(node: SlateNode, event: SlateEvent): EventResult {
@@ -673,12 +719,12 @@ function dispatchInput(node: SlateNode, event: SlateEvent): EventResult {
     const result = node.props.onSubmit?.(current, node);
     return result && result !== "ignored" ? result : "consumed";
   }
-  const chars = [...current];
+  const chars = segmentGraphemes(current);
   let cursor = Math.max(0, Math.min(chars.length, Math.trunc(Number(readValue(node.props.cursor)) || chars.length)));
-  if (event.kind === "paste" || event.kind === "ime" || (event.kind === "key" && code.length === 1 && ((event.modifiers ?? 0) & 6) === 0)) {
-    const insert = event.text ?? code;
-    chars.splice(cursor, 0, ...[...insert]);
-    cursor += [...insert].length;
+  const insert = segmentGraphemes(event.text ?? code);
+  if (event.kind === "paste" || event.kind === "ime" || (event.kind === "key" && insert.length === 1 && ((event.modifiers ?? 0) & 6) === 0)) {
+    chars.splice(cursor, 0, ...insert);
+    cursor += insert.length;
     return commitInput(node, chars.join(""), cursor);
   }
   if (event.kind !== "key") return "ignored";
@@ -744,22 +790,14 @@ function pathTo(node: SlateNode, id: ElementId): SlateNode[] | undefined {
 }
 
 function displayWidth(value: string): number {
-  return [...value].reduce((width, character) => {
-    const code = character.codePointAt(0)!;
-    if ((code >= 0x300 && code <= 0x36f) || (code >= 0xfe00 && code <= 0xfe0f)) return width;
-    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return width;
-    const wide = code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe10 && code <= 0xfe19) || (code >= 0xff01 && code <= 0xff60) || code >= 0x1f300);
-    return width + (wide ? 2 : 1);
-  }, 0);
+  return segmentGraphemes(value).reduce((width, grapheme) => width + graphemeWidth(grapheme), 0);
 }
 
 function truncateDisplay(value: string, limit: number): string {
   let width = 0;
   let result = "";
-  for (const character of [...value]) {
-    const code = character.codePointAt(0) ?? 0;
-    const wide = code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe10 && code <= 0xfe19) || (code >= 0xff01 && code <= 0xff60) || code >= 0x1f300);
-    const characterWidth = wide ? 2 : 1;
+  for (const character of segmentGraphemes(value)) {
+    const characterWidth = graphemeWidth(character);
     if (width + characterWidth > limit) break;
     result += character;
     width += characterWidth;
@@ -777,11 +815,12 @@ function validate(options: RenderOptions): void {
 }
 
 function renderFallback(options: RenderOptions): string {
-  const lines = options.text.split("\n");
-  const width = Math.max(1, options.width ?? Math.max(1, ...lines.map(displayWidth)));
-  const height = Math.max(1, options.height ?? Math.max(1, lines.length));
   const x = options.x ?? 0;
   const y = options.y ?? 0;
+  const width = Math.max(1, options.width ?? Math.max(1, ...options.text.split("\n").map(displayWidth)));
+  const availableWidth = options.width === undefined ? Number.POSITIVE_INFINITY : Math.max(1, width - x);
+  const lines = wrapDisplay(options.text, availableWidth);
+  const height = Math.max(1, options.height ?? Math.max(1, lines.length));
   let output = "\x1b[2J\x1b[H\x1b[?25l";
   const foreground = options.foreground && options.foreground !== "default" ? colorSequence(hex(options.foreground), 38) : "\x1b[39m";
   const background = options.background && options.background !== "default" ? colorSequence(hex(options.background), 48) : "\x1b[49m";
@@ -791,6 +830,48 @@ function renderFallback(options: RenderOptions): string {
     output += `\x1b[${row + 1};${x + 1}H${foreground}${background}${truncateDisplay(line, Math.max(0, width - x))}`;
   }
   return `${output}\x1b[0m`;
+}
+
+function wrapDisplay(value: string, maxWidth: number): string[] {
+  return value.replace(/\r\n?/g, "\n").split("\n").flatMap(line => {
+    if (line.length === 0 || !Number.isFinite(maxWidth)) return [line];
+    const result: string[] = [];
+    let current = "";
+    let width = 0;
+    for (const grapheme of segmentGraphemes(line)) {
+      const nextWidth = graphemeWidth(grapheme);
+      if (current && width + nextWidth > maxWidth) {
+        result.push(current);
+        current = "";
+        width = 0;
+      }
+      current += grapheme;
+      width += nextWidth;
+      if (width >= maxWidth) {
+        result.push(current);
+        current = "";
+        width = 0;
+      }
+    }
+    if (current || result.length === 0) result.push(current);
+    return result;
+  });
+}
+
+function segmentGraphemes(value: string): string[] {
+  const Segmenter = (Intl as typeof Intl & { Segmenter?: new (locale?: string, options?: { granularity: "grapheme" }) => { segment(input: string): Iterable<{ segment: string }> } }).Segmenter;
+  return Segmenter ? [...new Segmenter(undefined, { granularity: "grapheme" }).segment(value)].map(item => item.segment) : [...value];
+}
+
+function graphemeWidth(value: string): number {
+  const code = value.codePointAt(0) ?? 0;
+  if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return 0;
+  if (/^(?:\p{Mark}|\uFE0F|\u200D)/u.test(value)) return 0;
+  const wide = /\p{Extended_Pictographic}/u.test(value) || [...value].some(character => {
+    const point = character.codePointAt(0) ?? 0;
+    return point >= 0x1100 && (point <= 0x115f || point === 0x2329 || point === 0x232a || (point >= 0x2e80 && point <= 0xa4cf) || (point >= 0xac00 && point <= 0xd7a3) || (point >= 0xf900 && point <= 0xfaff) || (point >= 0xfe10 && point <= 0xfe19) || (point >= 0xff01 && point <= 0xff60) || point >= 0x1f300);
+  });
+  return wide ? 2 : 1;
 }
 
 function colorSequence(color: Color, code: number): string {

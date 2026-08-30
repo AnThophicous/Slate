@@ -1,6 +1,6 @@
 import { Block, Button, Container, Text } from "./vnode.js";
 import { Input, List, Modal } from "./widgets.js";
-import type { EventHandler, FlexDimension, NodeProps, SlateChild, SlateVNode } from "./types.js";
+import type { EventHandler, FlexDimension, LogLineValue, NodeProps, ReadableSignal, SlateChild, SlateVNode } from "./types.js";
 
 export interface LayoutProps extends Omit<NodeProps, "children"> {
   readonly children?: SlateChild;
@@ -56,7 +56,51 @@ export function Menu({ items, onChange, ...props }: NodeProps & { readonly items
   return List({ ...props, items, onChange, focusable: props.focusable ?? true });
 }
 
-export function LogView({ lines, follow = true, ...props }: NodeProps & { readonly lines: readonly string[] | import("./types.js").ReadableSignal<readonly string[]>; readonly follow?: boolean }): SlateVNode {
-  const value = (lines && typeof lines === "object" && "get" in lines) ? lines.get() : lines;
-  return Container({ ...props, children: Block({ id: props.id === undefined ? undefined : `${String(props.id)}:content`, text: value.join("\n"), overflow: "scroll", scrollTop: follow ? Number.MAX_SAFE_INTEGER : props.scrollTop }) });
+export interface LogViewProps extends Omit<NodeProps, "children"> {
+  readonly lines: readonly LogLineValue[] | ReadableSignal<readonly LogLineValue[]>;
+  readonly follow?: boolean;
+}
+
+/** Scrollable log surface with plain, styled and hyperlink-aware lines. */
+export function LogView({ lines, follow = true, ...props }: LogViewProps): SlateVNode {
+  const value = lines && typeof lines === "object" && "get" in lines ? lines.get() : lines;
+  const baseId = props.id === undefined ? undefined : String(props.id);
+  const overflow = props.overflow as NodeProps["overflow"] | undefined;
+  const scrollTop = props.scrollTop as number | undefined;
+  const children = value.map((line, index) => logLine(baseId, line, index));
+  return Container({
+    ...props,
+    overflow: overflow ?? "scroll",
+    scrollTop: follow ? Number.MAX_SAFE_INTEGER : scrollTop,
+    children
+  });
+}
+
+function logLine(baseId: string | undefined, value: LogLineValue, index: number): SlateVNode {
+  const line = typeof value === "string" ? { text: value } : value;
+  const lineId = baseId === undefined ? undefined : line.id ?? `${baseId}:line:${index}`;
+  const lineStyle = line.style;
+  const runs = line.runs ?? line.spans;
+  const children = runs && runs.length > 0
+    ? runs.map((run, runIndex) => Text({
+      id: lineId === undefined ? undefined : `${String(lineId)}:run:${runIndex}`,
+      text: run.text,
+      textStyle: run.style,
+      link: run.link
+    }))
+    : [Text({
+      id: lineId === undefined ? undefined : `${String(lineId)}:text`,
+      text: line.text ?? "",
+      textStyle: lineStyle,
+      link: line.link
+    })];
+  return Container({
+    id: lineId,
+    direction: "row",
+    foreground: lineStyle?.foreground,
+    background: lineStyle?.background,
+    textStyle: lineStyle,
+    link: line.link,
+    children
+  });
 }

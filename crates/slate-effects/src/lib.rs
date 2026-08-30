@@ -107,13 +107,14 @@ impl Effect for Glow {
             for x in area.x()..end_x {
                 let point = Point::new(x, y);
                 let source = original.get(point).expect("point is in frame");
-                if source.symbol() != ' ' {
+                if source.symbol() != ' ' && !source.is_continuation() {
                     let style = source.style().foreground(mix(
                         source.style().foreground_color(),
                         self.color,
                         self.amount(point, elapsed),
                     ));
-                    frame.set(point, Cell::new(source.symbol(), style));
+                    let grapheme = original.grapheme(point).expect("point is in frame");
+                    frame.set_grapheme(point, grapheme.as_ref(), style);
                     continue;
                 }
                 let radius = self.radius.min(frame.size().width().max(frame.size().height()));
@@ -194,14 +195,17 @@ impl Effect for ColorShift {
         for y in area.y()..end_y {
             for x in area.x()..end_x {
                 let point = Point::new(x, y);
-                if let Some(cell) = frame.get(point).filter(|cell| cell.symbol() != ' ') {
-                    frame.set(
-                        point,
-                        Cell::new(
-                            cell.symbol(),
+                if let Some(cell) =
+                    frame.get(point).filter(|cell| cell.symbol() != ' ' && !cell.is_continuation())
+                {
+                    let grapheme = frame.grapheme(point).map(|value| value.into_owned());
+                    if let Some(grapheme) = grapheme {
+                        frame.set_grapheme(
+                            point,
+                            &grapheme,
                             cell.style().foreground(interpolate(self.from, self.to, amount)),
-                        ),
-                    );
+                        );
+                    }
                 }
             }
         }

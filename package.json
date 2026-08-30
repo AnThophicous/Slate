@@ -1,6 +1,6 @@
 {
   "name": "slate-workspace",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "Workspace da biblioteca Slate para interfaces interativas de terminal.",
   "keywords": ["terminal-ui", "tui", "rust", "nodejs", "typescript", "tsx", "ink-alternative", "mouse", "keyboard"],
@@ -14,6 +14,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:stress": "npm run build && node --test tests/node-stress.mjs",
+    "test:windows": "node --test tests/windows-shell.test.mjs",
     "benchmark": "npm run build --workspace @slate-terminal/react && node benchmarks/compare.mjs",
     "examples:typecheck": "npx tsc --noEmit -p examples/tsx/tsconfig.json",
     "pack:check": "npm pack --dry-run --workspace @slate-terminal/core && npm pack --dry-run --workspace @slate-terminal/react && npm pack --dry-run --workspace @slate-terminal/native",

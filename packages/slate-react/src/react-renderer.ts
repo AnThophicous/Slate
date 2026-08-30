@@ -6,6 +6,8 @@ export interface ReactTerminalRoot<S = undefined> {
   readonly app: SlateApplication<S>;
   readonly render: (element: unknown) => void;
   readonly unmount: () => void;
+  /** Unmounts React and releases Slate's reactive subscriptions. */
+  readonly close: () => void;
 }
 
 /**
@@ -17,8 +19,13 @@ export interface ReactTerminalRoot<S = undefined> {
 export async function createReactTerminalRoot<S = undefined>(options: SlateAppOptions = {}): Promise<ReactTerminalRoot<S>> {
   // The peer has no official type package; the host config is intentionally
   // structural so this remains compatible across React 18/19 reconciler builds.
-  // @ts-ignore react-reconciler may ship no declarations in consumer projects.
-  const reconcilerModule = await import("react-reconciler");
+  let reconcilerModule: unknown;
+  try {
+    // @ts-ignore react-reconciler may ship no declarations in consumer projects.
+    reconcilerModule = await import("react-reconciler");
+  } catch (error) {
+    throw incompatibleReactError(error);
+  }
   const Reconciler = (reconcilerModule as unknown as { default?: (config: unknown) => any }).default ?? reconcilerModule;
   let rootChildren: SlateChild[] = [];
   let app!: SlateApplication<S>;
@@ -60,6 +67,7 @@ export async function createReactTerminalRoot<S = undefined>(options: SlateAppOp
     },
     removeChild: (parent: SlateVNode, child: SlateChild) => remove(parent, child),
     removeChildFromContainer: (parent: typeof container, child: SlateChild) => removeFrom(parent.children, child),
+    detachDeletedInstance: () => undefined,
     prepareUpdate: () => true,
     commitUpdate: (instance: SlateVNode, _type: string, _old: unknown, next: Record<string, unknown>) => Object.assign(instance.props, next),
     commitTextUpdate: (_instance: string, _old: string, _next: string) => undefined,
@@ -76,14 +84,34 @@ export async function createReactTerminalRoot<S = undefined>(options: SlateAppOp
     cancelTimeout: clearTimeout,
     noTimeout: -1
   };
-  app = createSlateApp(() => rootChildren, options) as unknown as SlateApplication<S>;
-  const reconciler = (Reconciler as (config: unknown) => any)(hostConfig);
+  app = createSlateApp(() => rootChildren, { ...options, autoMount: false }) as unknown as SlateApplication<S>;
+  let reconciler: any;
+  try {
+    if (typeof Reconciler !== "function") throw new TypeError("react-reconciler did not export a reconciler factory");
+    reconciler = (Reconciler as (config: unknown) => any)(hostConfig);
+  } catch (error) {
+    throw incompatibleReactError(error);
+  }
   const fiberRoot = reconciler.createContainer(container, 0, null, false, null, "Slate", console.error, null);
+  const unmount = () => {
+    reconciler.updateContainer(null, fiberRoot, null, undefined);
+    app.unmount();
+  };
   return {
     app,
     render: element => reconciler.updateContainer(element, fiberRoot, null, undefined),
-    unmount: () => reconciler.updateContainer(null, fiberRoot, null, undefined)
+    unmount,
+    close: unmount
   };
+}
+
+function incompatibleReactError(cause: unknown): Error {
+  return new Error(
+    "@slate-terminal/react: createReactTerminalRoot precisa de React e de um react-reconciler compatível. "
+      + "React 19 usa react-reconciler 0.31; React 18 deve usar a linha 0.29. "
+      + "O createReactAdapter continua disponível para React 18 sem o reconciler de terminal.",
+    { cause }
+  );
 }
 
 function append(parent: SlateVNode, child: SlateChild): void {

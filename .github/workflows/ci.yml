@@ -34,3 +34,20 @@ jobs:
       - run: npm run examples:typecheck
       - run: npm run test:stress
       - run: npm run pack:check
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:windows
+      - name: Verify the same lifecycle under CMD
+        shell: cmd
+        run: npm run test:windows

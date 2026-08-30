@@ -1,5 +1,8 @@
 export declare function clearScreen(): void
 
+/** Restores cursor, alternate screen, raw mode and every capture mode. */
+export declare function closeTerminal(): void
+
 export declare function disableAlternateScreen(): void
 
 export declare function disableBracketedPaste(): void

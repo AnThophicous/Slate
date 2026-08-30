@@ -219,6 +219,12 @@ pub fn show_cursor() -> Result<()> {
     CrosstermInput::new().show_cursor().map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
+/// Restores cursor, alternate screen, raw mode and every capture mode.
+#[napi]
+pub fn close_terminal() -> Result<()> {
+    CrosstermInput::new().close().map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
 #[napi]
 pub fn enable_raw_mode() -> Result<()> {
     CrosstermInput::new()

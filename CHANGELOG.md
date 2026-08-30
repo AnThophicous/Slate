@@ -1,10 +1,31 @@
 # Changelog
 
+## [2.2.0] - 2026-08-30
+
+Slate 2.2.0 is ready for release. This release hardens terminal lifecycle
+management, mouse routing and Unicode rendering across the TypeScript and Rust
+stacks, with a detailed production guide and cross-platform regression tests.
+
+### Added
+
+- Emergency `Ctrl+C` shutdown through `app.dispatch`, routers and terminal controllers.
+- Semantic input normalization/deduplication, canonical mouse aliases and hit-test `target`.
+- Styled/link-aware `LogView`, multiline wrapping by grapheme and grapheme-safe input cursors.
+- Official legacy renderer adapters and an explicit React 18/19 reconciler compatibility matrix.
+- Windows CMD/PowerShell lifecycle tests plus resize, mouse, Unicode and React reconciler coverage.
+- Detailed production guide with lifecycle, API, integration and anti-pattern examples.
+
+### Fixed
+
+- Disabled nodes no longer consume events before enabled ancestors can bubble them.
+- Mouse events outside the rendered hit-test area no longer fall back to the root.
+- The terminal controller does not emit a transient empty first frame and restores modes on close.
+
 ## [2.1.0] - 2026-08-30
 
-Slate 2.1.0 is scheduled for release today. This release adds the React
-terminal reconciler, high-level terminal APIs, reusable classes, stable node
-and event identities, richer components, and improved Unicode grapheme support.
+Slate 2.1.0 introduced the React terminal reconciler, high-level terminal
+APIs, reusable classes, stable node and event identities, richer components,
+and improved Unicode grapheme support.
 
 ## [2.0.0] - 2026-08-30
 

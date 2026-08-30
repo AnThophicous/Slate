@@ -1,10 +1,10 @@
 [package]
 name = "slate-effects"
 description = "Efeitos visuais opcionais para frames Slate."
-version = "2.1.0"
+version = "2.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
 
 [dependencies]
-slate-core = { path = "../slate-core", version = "2.1.0" }
+slate-core = { path = "../slate-core", version = "2.2.0" }

@@ -306,6 +306,11 @@ impl Container {
     pub fn dispatch(&mut self, event: &Event) -> EventResult {
         if let Event::Key(key) = event {
             if matches!(key.kind(), crate::KeyEventKind::Press | crate::KeyEventKind::Repeat)
+                && key.is_ctrl_c()
+            {
+                return EventResult::Exit;
+            }
+            if matches!(key.kind(), crate::KeyEventKind::Press | crate::KeyEventKind::Repeat)
                 && key.code() == crate::KeyCode::Tab
             {
                 self.focus_next(key.modifiers().contains(crate::Modifiers::SHIFT));
@@ -470,6 +475,14 @@ mod tests {
         assert_eq!(tree.focused(), Some(ElementId::new(3)));
         assert_eq!(tree.dispatch(&reverse_tab), EventResult::Consumed);
         assert_eq!(tree.focused(), Some(ElementId::new(2)));
+    }
+
+    #[test]
+    fn ctrl_c_is_an_emergency_exit() {
+        let root = Element::new(ElementId::new(1), Rect::new(0, 0, 10, 1), Text);
+        let mut tree = Container::new(root);
+        let event = Event::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL));
+        assert_eq!(tree.dispatch(&event), EventResult::Exit);
     }
 
     #[test]

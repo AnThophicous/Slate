@@ -9,6 +9,7 @@ import {
   createReactAdapter,
   createSlateApp,
   createInputRouter,
+  createNormalizedInput,
   createTerminalController,
   createSlateHooks,
   createSlateRoot,
@@ -23,9 +24,15 @@ import {
   Glow,
   Select,
   List,
+  LogView,
   Text,
   signal,
   renderTreeToAnsi,
+  adaptLegacyRenderer,
+  createReactTerminalRoot,
+  sameEvent,
+  semanticEventKey,
+  isEmergencyExit,
   jsx,
   reconcile,
   resolveTree
@@ -281,6 +288,16 @@ test("router para quando um handler solicita exit", () => {
   assert.equal(calls, 1);
 });
 
+test("router.close libera a fonte e desmonta o app", () => {
+  const app = createSlateApp(Text({ id: "text", text: "Slate" }), { viewport: { width: 10, height: 1 } });
+  let released = 0;
+  const router = createInputRouter(app, { poll: () => null, close: () => { released += 1; } }, 1000);
+  router.close();
+  router.close();
+  assert.equal(released, 1);
+  assert.equal(app.getTree(), null);
+});
+
 test("API de edição preserva update, append e remove por ID", async () => {
   const app = createSlateApp(Container({ id: "root", children: Text({ id: "message", text: "antes" }) }), { viewport: { width: 20, height: 3 } });
   assert.equal(app.update("message", { text: "depois" }), true);
@@ -314,4 +331,130 @@ test("widgets suportam estado interno quando props não são controladas", async
   assert.equal(tree?.children.find(child => child.id === "select")?.props.selectedIndex, 1);
   assert.equal(tree?.children.find(child => child.id === "check")?.props.checked, true);
   assert.equal(tree?.children.find(child => child.id === "list")?.props.activeIndex, 1);
+});
+
+test("normaliza mouse de fontes Windows e deduplica eventos semanticamente", () => {
+  const first = { kind: "mouse", action: "Moved", button: "Left", x: 4, y: 2 };
+  const source = {
+    events: [first, { ...first }, null],
+    poll() { return this.events.shift() ?? null; }
+  };
+  const input = createNormalizedInput(source);
+  const normalized = input.poll();
+  assert.equal(normalized?.action, "move");
+  assert.equal(normalized?.button, "left");
+  assert.equal(input.poll(), null);
+  assert.equal(sameEvent(first, { ...first, action: "move", button: "left" }), true);
+  assert.equal(sameEvent(normalized, { ...normalized, id: "different" }), true);
+  assert.equal(semanticEventKey(normalized).includes("different"), false);
+});
+
+test("hit-test expõe o alvo, não propaga mouse fora da viewport e deixa disabled passar ao pai", () => {
+  let parentEvents = 0;
+  let childPresses = 0;
+  const app = createSlateApp(Container({
+    id: "root",
+    width: 8,
+    height: 2,
+    onMouse: event => {
+      parentEvents += 1;
+      assert.equal(event.target, "disabled");
+      return "consumed";
+    },
+    children: Button({ id: "disabled", width: 8, disabled: true, onPress: () => { childPresses += 1; } })
+  }), { viewport: { width: 8, height: 2 } });
+  assert.equal(app.dispatch({ kind: "mouse", action: "press", button: "left", x: 2, y: 0 }), "consumed");
+  assert.equal(parentEvents, 1);
+  assert.equal(childPresses, 0);
+  assert.equal(app.dispatch({ kind: "mouse", action: "press", button: "left", x: 20, y: 0 }), "ignored");
+  assert.equal(parentEvents, 1);
+});
+
+test("onHover sinaliza entrada, troca e saída do alvo", () => {
+  const events = [];
+  const app = createSlateApp(Container({ id: "root", width: 10, height: 1, direction: "row", children: [
+    Block({ id: "left", width: 5, onHover: event => { events.push(["left", event.target]); return "render"; } }),
+    Block({ id: "right", width: 5, onHover: event => { events.push(["right", event.target]); return "render"; } })
+  ] }), { viewport: { width: 10, height: 1 } });
+  assert.equal(app.dispatch({ kind: "mouse", action: "move", x: 1, y: 0 }), "render");
+  app.dispatch({ kind: "mouse", action: "move", x: 6, y: 0 });
+  app.dispatch({ kind: "mouse", action: "move", x: 20, y: 0 });
+  assert.deepEqual(events, [["left", "left"], ["left", "right"], ["right", "right"], ["right", undefined]]);
+});
+
+test("Ctrl+C é uma saída de emergência e close desmonta o app", () => {
+  const app = createSlateApp(Text({ id: "text", text: "Slate" }), { viewport: { width: 8, height: 1 } });
+  const event = { kind: "key", code: "c", modifiers: 2 };
+  assert.equal(isEmergencyExit(event), true);
+  assert.equal(app.dispatch(event), "exit");
+  app.close();
+  assert.equal(app.getTree(), null);
+});
+
+test("controller fecha input, subscriptions e cursor ao receber Ctrl+C", () => {
+  const app = createSlateApp(Text({ id: "text", text: "Slate" }), { viewport: { width: 8, height: 1 } });
+  const writes = [];
+  let exited = 0;
+  let released = 0;
+  const controller = createTerminalController(app, {
+    poll: () => ({ kind: "key", code: "c", modifiers: 2 }),
+    close: () => { released += 1; }
+  }, { write: value => { writes.push(value); } }, { onExit: () => { exited += 1; } });
+  controller.start();
+  assert.equal(controller.running(), false);
+  assert.equal(exited, 1);
+  assert.equal(released, 1);
+  assert.equal(app.getTree(), null);
+  assert.match(writes.at(-1), /\x1b\[\?25h/);
+  controller.close();
+});
+
+test("resize atualiza o viewport e multiline/wrapping respeitam graphemes", async () => {
+  const app = createSlateApp(Text({ id: "text", width: 3, height: 3, text: "a👩‍💻b\ncd" }), { viewport: { width: 3, height: 3 } });
+  app.dispatch({ kind: "resize", width: 4, height: 5 });
+  await Promise.resolve();
+  assert.deepEqual(app.getViewport(), { width: 4, height: 5 });
+  const tree = app.getTree();
+  const layout = app.getLayout();
+  const plain = app.renderAnsi({ clear: false, hideCursor: true }).replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+  assert.ok(tree && layout);
+  assert.match(plain, /a👩‍💻/);
+  assert.match(plain, /b/);
+  assert.match(plain, /cd/);
+});
+
+test("LogView aceita runs com estilo e links ANSI", () => {
+  const tree = resolveTree(LogView({ id: "log", lines: [
+    { runs: [{ text: "OK", style: { bold: true, foreground: "#00ff00" } }, { text: " docs", link: "https://example.com" }] },
+    { text: "linha 2", style: { underline: true } }
+  ] }));
+  const layout = createFlexLayoutEngine().layout(tree, { width: 30, height: 4 });
+  const output = renderTreeToAnsi(tree, layout, { width: 30, height: 4 }, { clear: false, hideCursor: true });
+  assert.match(output, /OK/);
+  assert.match(output, /38;2;0;255;0/);
+  assert.match(output, /\x1b\]8;;https:\/\/example\.com/);
+  assert.match(output, /linha 2/);
+});
+
+test("adaptLegacyRenderer envolve renderers antigos no host Slate", () => {
+  const Legacy = adaptLegacyRenderer(props => String(props.label ?? "legacy"));
+  const tree = resolveTree(Legacy({ id: "legacy", label: "compatível" }));
+  assert.equal(tree?.type, "block");
+  assert.equal(tree?.children[0]?.props.text, "compatível");
+});
+
+test("React reconciler monta uma árvore sem produzir root vazio", async () => {
+  const React = await import("react");
+  const root = await createReactTerminalRoot({ viewport: { width: 20, height: 2 } });
+  const writes = [];
+  const controller = createTerminalController(root.app, { poll: () => null }, { write: value => { writes.push(value); } });
+  controller.start();
+  assert.equal(writes.length, 0);
+  root.render(React.createElement("container", { id: "react-root" }, React.createElement("text", { id: "message", text: "React" })));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(root.app.getTree()?.id, "react-root");
+  assert.match(writes.at(-1), /React/);
+  controller.close();
+  root.close();
 });

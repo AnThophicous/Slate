@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/AnThophicous/Slate/actions/workflows/ci.yml/badge.svg)](https://github.com/AnThophicous/Slate/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/) [![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
 
-Slate 2.0.0 é um toolkit de interfaces interativas para terminal escrito em Rust, com runtime nativo para Node.js e uma API TypeScript/TSX que funciona sem React. Teclado, mouse, paste, resize e foco usam o mesmo contrato de eventos.
+Slate 2.2.0 é um toolkit de interfaces interativas para terminal escrito em Rust, com runtime nativo para Node.js e uma API TypeScript/TSX que funciona sem React. Teclado, mouse, paste, resize e foco usam o mesmo contrato de eventos.
 
 O modelo visual principal chama-se Slate Mosaic: uma árvore de containers e elementos com IDs estáveis, layout Flexbox, reconciliação incremental e atualização reativa. O Mosaic permite construir a interface por blocos, editar qualquer elemento e manter um único ciclo de renderização.
 
@@ -13,6 +13,11 @@ npm install @slate-terminal/core @slate-terminal/react @slate-terminal/native
 ```
 
 O pacote nativo contém os bindings N-API para o sistema operacional publicado. Durante o desenvolvimento local, `npm run native:build` compila o addon para a plataforma atual.
+
+O [guia de produção](docs/guide.md) é a referência aprofundada: explica o
+modelo Mosaic, ciclo de vida, encerramento, mouse/hit-test, eventos, foco,
+wrapping por grapheme, `LogView`, integração React 18/19, adaptação de APIs
+antigas e testes reais.
 
 ## TSX sem React
 
@@ -66,6 +71,17 @@ Componentes prontos: `Container`, `Block`, `Text`, `Button`, `Input`, `Select`, 
 
 Foco e entrada incluem navegação por Tab/Shift+Tab, mouse por hit-test de layout, atalhos via `onEvent`, paste, IME, cursor, resize e um `createInputRouter` para conectar qualquer fonte síncrona de eventos. `useInput`, `useFocus`, `useFocusManager`, `useCursor` e `useWindowSize` são helpers agnósticos de React.
 
+`Ctrl+C` é o comando de emergência: o dispatch retorna `"exit"` antes dos
+handlers e `createTerminalController` fecha o router, desmonta a árvore e
+restaura o cursor. Use `controller.close()` (ou `dispose()`) no encerramento
+normal e `closeTerminal()` para restaurar os modos nativos.
+
+Eventos de mouse carregam `target` do hit-test e respeitam clipping, scroll,
+ordem visual e coordenadas fora da viewport. `normalizeEvent` também aceita
+aliases de terminais/Windows e `createNormalizedInput` remove duplicatas
+semanticamente iguais. `LogView` aceita tanto `string` quanto linhas com
+`style`, `link` e `runs`.
+
 As cores customizadas usam `#RGB` ou `#RRGGBB`. O renderer preserva UTF-8 e calcula largura de glifos para texto largo.
 
 `Glow` e `ColorShift` podem envolver texto ou ser declarados em `effect`; a interpolação é feita por glifo e `createTerminalController` agenda a animação sem emitir frames idênticos.
@@ -107,7 +123,10 @@ cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-Os exemplos ficam em `examples/`, o guia de migração em `docs/ink-migration.md` e a especificação da 2.0 em `docs/slate-2.0.md`.
+Os exemplos ficam em `examples/`, o [guia de produção](docs/guide.md), o guia
+de migração em `docs/ink-migration.md` e a especificação da 2.0 em
+`docs/slate-2.0.md`. No Windows, `npm run test:windows` executa o fixture em
+CMD e PowerShell.
 
 ## Licença
 

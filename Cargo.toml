@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.1.0"
+version = "2.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -26,3 +26,4 @@ napi-build = "2"
 napi-derive = "3"
 thiserror = "2.0"
 unicode-width = "0.2"
+unicode-segmentation = "1.13"

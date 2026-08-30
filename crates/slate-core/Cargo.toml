@@ -11,3 +11,4 @@ readme = "../../README.md"
 [dependencies]
 bitflags.workspace = true
 unicode-width.workspace = true
+unicode-segmentation.workspace = true
