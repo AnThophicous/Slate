@@ -63,6 +63,10 @@
     "test:typecheck": "tsc --noEmit -p test/tsconfig.json",
     "test": "npm run build && npm run test:typecheck && node --test test/index.test.mjs"
   },
+  "devDependencies": {
+    "react": "^19.0.0",
+    "react-reconciler": "^0.31.0"
+  },
   "peerDependencies": {
     "react": ">=18",
     "react-reconciler": ">=0.29.0 <0.32.0",
