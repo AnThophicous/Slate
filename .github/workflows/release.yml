@@ -84,6 +84,10 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: cp release-assets/*.node packages/slate-native/
+      - name: Verify npm publisher identity
+        run: npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: npm publish --workspace @slate-terminal/native --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
