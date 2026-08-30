@@ -105,7 +105,7 @@ function fill(cells: Cell[][], rect: LayoutRect, clip: LayoutRect, background: s
 function drawText(cells: Cell[][], x: number, y: number, text: string, clip: LayoutRect, style: TerminalStyle, effect: EffectSpec | undefined, frameIndex: number, lineIndex: number): void {
   if (y < clip.y || y >= clip.y + clip.height || y < 0 || y >= cells.length) return;
   let cursor = x;
-  const characters = [...text];
+  const characters = segmentGraphemes(text);
   for (const [characterIndex, character] of characters.entries()) {
     const width = characterWidth(character);
     const glyphStyle = effectStyle(style, effect, characterIndex, lineIndex, frameIndex, characters.length);
@@ -220,7 +220,15 @@ function rgb(value: string | undefined): readonly [number, number, number] | und
 
 function characterWidth(value: string): number {
   const code = value.codePointAt(0) ?? 0;
-  if ((code >= 0x300 && code <= 0x36f) || (code >= 0xfe00 && code <= 0xfe0f) || code < 0x20) return 0;
-  if (code >= 0x1100 && (code <= 0x115f || code === 0x2329 || code === 0x232a || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe10 && code <= 0xfe19) || (code >= 0xff01 && code <= 0xff60) || code >= 0x1f300)) return 2;
+  if (code < 0x20 || /^(?:\p{Mark}|\uFE0F|\u200D)/u.test(value)) return 0;
+  if (/\p{Extended_Pictographic}/u.test(value) || [...value].some(char => {
+    const point = char.codePointAt(0) ?? 0;
+    return point >= 0x1100 && (point <= 0x115f || point === 0x2329 || point === 0x232a || (point >= 0x2e80 && point <= 0xa4cf) || (point >= 0xac00 && point <= 0xd7a3) || (point >= 0xf900 && point <= 0xfaff) || (point >= 0xfe10 && point <= 0xfe19) || (point >= 0xff01 && point <= 0xff60));
+  })) return 2;
   return 1;
+}
+
+function segmentGraphemes(value: string): string[] {
+  const Segmenter = (Intl as typeof Intl & { Segmenter?: new (locale?: string, options?: { granularity: "grapheme" }) => { segment(input: string): Iterable<{ segment: string }> } }).Segmenter;
+  return Segmenter ? [...new Segmenter(undefined, { granularity: "grapheme" }).segment(value)].map(item => item.segment) : [...value];
 }

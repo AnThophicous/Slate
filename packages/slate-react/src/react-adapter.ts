@@ -20,6 +20,28 @@ export interface ReactAdapter {
   readonly toReact: (value: SlateChild) => unknown;
 }
 
+/**
+ * Creates the native React-facing surface without importing React at module
+ * load time. Pass the React namespace from the application. This keeps Slate
+ * usable with React 18 and 19, while the terminal runtime remains independent.
+ */
+export interface SlateReactRenderer extends ReactAdapter {
+  readonly createElement: ReactRuntime["createElement"];
+  readonly Fragment: unknown;
+  readonly createSlateElement: (type: unknown, props?: Readonly<Record<string, unknown>> | null, ...children: unknown[]) => unknown;
+}
+
+export function createSlateReactRenderer(react: ReactRuntime): SlateReactRenderer {
+  const adapter = createReactAdapter(react);
+  const Fragment = react.Fragment ?? Symbol.for("react.fragment");
+  return {
+    ...adapter,
+    createElement: react.createElement,
+    Fragment,
+    createSlateElement: (type, props, ...children) => react.createElement(type, props ?? null, ...children)
+  };
+}
+
 export function createReactAdapter(runtime: ReactRuntime, options: ReactAdapterOptions = {}): ReactAdapter {
   const hooks = createSlateHooks(runtime);
   const toReact = (value: SlateChild): unknown => {

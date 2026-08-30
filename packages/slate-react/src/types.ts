@@ -84,6 +84,8 @@ export interface ColorShiftEffect {
 export type EffectSpec = GlowEffect | ColorShiftEffect;
 
 export interface SlateEvent {
+  /** Unique identity assigned by Slate at dispatch boundaries. */
+  readonly id?: string;
   readonly kind: "key" | "mouse" | "resize" | "paste" | "focusGained" | "focusLost" | "ime";
   readonly code?: string;
   readonly text?: string;
@@ -118,6 +120,8 @@ export interface NodeProps {
   readonly y?: number;
   readonly children?: SlateChild;
   readonly style?: FlexStyle;
+  readonly className?: string;
+  readonly class?: string;
   readonly direction?: FlexDirection;
   readonly wrap?: FlexWrap;
   readonly gap?: FlexDimension;
@@ -157,6 +161,7 @@ export interface NodeProps {
   readonly scrollLeft?: number;
   readonly scrollTop?: number;
   readonly visible?: boolean;
+  readonly disabled?: boolean;
   readonly focusable?: boolean;
   readonly foreground?: string;
   readonly background?: string;
@@ -182,6 +187,7 @@ export interface NodeProps {
   readonly onEvent?: EventHandler;
   readonly onKey?: EventHandler;
   readonly onMouse?: EventHandler;
+  readonly onHover?: EventHandler;
   readonly onPaste?: EventHandler;
   readonly onResize?: EventHandler;
   readonly onIme?: EventHandler;
@@ -203,6 +209,7 @@ export type HostType = "container" | "block" | "button" | "text" | "input" | "se
 export type SlateElementType<P extends object = SlateProps> = HostType | SlateComponent<P> | symbol;
 
 export interface SlateVNode<P extends object = SlateProps> {
+  readonly uid: string;
   readonly $$typeof: symbol;
   readonly type: SlateElementType<P>;
   readonly key: Key | null;
@@ -212,6 +219,7 @@ export interface SlateVNode<P extends object = SlateProps> {
 export type ResolvedProps = Readonly<Record<string, unknown>>;
 
 export interface ComponentTreeNode {
+  readonly uid: string;
   readonly id: ElementId;
   readonly key: Key | null;
   readonly type: HostType;

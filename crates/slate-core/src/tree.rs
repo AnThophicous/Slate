@@ -19,6 +19,7 @@ pub struct Element {
     component: Box<dyn Component>,
     children: Vec<Element>,
     focusable: bool,
+    disabled: bool,
     visible: bool,
     style: FlexStyle,
 }
@@ -68,6 +69,7 @@ impl Element {
             component: Box::new(component),
             children: Vec::new(),
             focusable: false,
+            disabled: false,
             visible: true,
             style: FlexStyle::default(),
         }
@@ -87,6 +89,16 @@ impl Element {
     }
     pub const fn is_focusable(&self) -> bool {
         self.focusable
+    }
+    pub const fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+    pub fn set_disabled(&mut self, value: bool) {
+        self.disabled = value;
+    }
+    pub fn disabled(mut self, value: bool) -> Self {
+        self.disabled = value;
+        self
     }
     pub fn focusable(mut self, value: bool) -> Self {
         self.focusable = value;
@@ -259,7 +271,11 @@ impl Container {
         self.root.render_tree(frame);
     }
     pub fn focus(&mut self, id: ElementId) -> bool {
-        if self.root.find(id).is_some_and(Element::is_focusable) {
+        if self
+            .root
+            .find(id)
+            .is_some_and(|element| element.is_focusable() && !element.is_disabled())
+        {
             self.focused = Some(id);
             true
         } else {
@@ -301,10 +317,12 @@ impl Container {
             if !self.root.hit_path(mouse.position(), &mut path) {
                 return EventResult::Ignored;
             }
-            if matches!(mouse.kind(), crate::MouseEventKind::Press(_)) {
-                if let Some(id) =
-                    path.iter().find(|id| self.root.find(**id).is_some_and(Element::is_focusable))
-                {
+            if matches!(mouse.kind(), crate::MouseEventKind::Press(crate::MouseButton::Left)) {
+                if let Some(id) = path.iter().find(|id| {
+                    self.root
+                        .find(**id)
+                        .is_some_and(|element| element.is_focusable() && !element.is_disabled())
+                }) {
                     self.focus(*id);
                 }
             }
@@ -318,6 +336,9 @@ impl Container {
         }
         for id in path {
             if let Some(element) = self.root.find_mut(id) {
+                if element.is_disabled() {
+                    continue;
+                }
                 let result = element.component.handle_event(event);
                 if result != EventResult::Ignored {
                     return result;
@@ -349,7 +370,7 @@ fn collect_focusable(element: &Element, ids: &mut Vec<ElementId>) {
     if !element.is_visible() {
         return;
     }
-    if element.is_focusable() {
+    if element.is_focusable() && !element.is_disabled() {
         ids.push(element.id());
     }
     for child in element.children() {

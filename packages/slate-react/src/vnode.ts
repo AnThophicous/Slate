@@ -1,5 +1,7 @@
 import { isSignal } from "./reactive.js";
 import type { ComponentTreeNode, ElementId, HostType, Key, ResolvedProps, SlateChild, SlateComponent, SlateElementType, SlateProps, SlateVNode } from "./types.js";
+import { uuid } from "./identity.js";
+import { resolveClasses } from "./classes.js";
 
 export const Fragment = Symbol.for("slate.fragment");
 
@@ -43,7 +45,7 @@ export function resolveTree(value: SlateChild): ComponentTreeNode | null {
     if (node) assertUniqueIds(node, new Set<ElementId>());
     return node;
   }
-  const root: ComponentTreeNode = { id: "root", key: null, type: "fragment", props: {}, children: nodes };
+  const root: ComponentTreeNode = { id: "root", uid: uuid(), key: null, type: "fragment", props: {}, children: nodes };
   assertUniqueIds(root, new Set<ElementId>());
   return root;
 }
@@ -54,7 +56,7 @@ function createVNode<P extends object>(type: SlateElementType<P>, props: P | nul
   const propKey = asKey(nextProps.key);
   delete nextProps.key;
   if (children.length > 0) nextProps.children = packChildren(children);
-  return { $$typeof: vnodeType, type, key: explicitKey ?? propKey, props: nextProps as P };
+  return { $$typeof: vnodeType, uid: uuid(), type, key: explicitKey ?? propKey, props: nextProps as P };
 }
 
 function packChildren(children: SlateChild[]): SlateChild {
@@ -65,7 +67,7 @@ function packChildren(children: SlateChild[]): SlateChild {
 function resolveValue(value: SlateChild, path: string, stack: Set<SlateVNode>): ComponentTreeNode[] {
   if (value === null || value === undefined || typeof value === "boolean") return [];
   if (isSignal(value)) return resolveValue(value.get() as SlateChild, `${path}.signal`, stack);
-  if (typeof value === "string" || typeof value === "number") return [createResolvedNode(`${path}.text`, null, "text", { text: String(value) }, [])];
+  if (typeof value === "string" || typeof value === "number") return [createResolvedNode(`${path}.text`, null, "text", { text: String(value) }, [], uuid())];
   if (Array.isArray(value)) return value.flatMap((child, index) => resolveValue(child, `${path}.${index}`, stack));
   if (!isSlateVNode(value)) throw new TypeError("filho Slate inválido");
   if (stack.has(value)) throw new RangeError("árvore Slate cíclica");
@@ -83,9 +85,9 @@ function resolveValue(value: SlateChild, path: string, stack: Set<SlateVNode>): 
   } else if (typeof value.type === "string") {
     const props = readProps(value);
     const children = resolveValue(props.children, `${path}.children`, stack);
-    const resolvedProps = normalizeProps(withoutChildren(props));
+    const resolvedProps = normalizeProps(resolveClasses(withoutChildren(props)));
     const id = asElementId(resolvedProps.id) ?? value.key ?? path;
-    result = [createResolvedNode(id, value.key, value.type as HostType, resolvedProps, children)];
+    result = [createResolvedNode(id, value.key, value.type as HostType, resolvedProps, children, value.uid)];
   } else {
     throw new TypeError("tipo de elemento Slate inválido");
   }
@@ -143,8 +145,8 @@ function normalizeProps(props: ResolvedProps): ResolvedProps {
   return result;
 }
 
-function createResolvedNode(id: ElementId, key: Key | null, type: HostType, props: ResolvedProps, children: readonly ComponentTreeNode[]): ComponentTreeNode {
-  return { id, key, type, props, children };
+function createResolvedNode(id: ElementId, key: Key | null, type: HostType, props: ResolvedProps, children: readonly ComponentTreeNode[], uid = uuid()): ComponentTreeNode {
+  return { id, uid, key, type, props, children };
 }
 
 function readProps(value: SlateVNode): SlateProps {

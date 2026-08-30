@@ -80,7 +80,7 @@ export function pathTo(tree: ComponentTreeNode, id: ElementId): readonly Compone
 
 function collect(tree: ComponentTreeNode, layout: LayoutTreeNode, result: FocusTarget[]): void {
   if (!renderedNode(tree)) return;
-  if (tree.props.focusable === true) result.push({ node: tree, layout });
+  if (tree.props.focusable === true && tree.props.disabled !== true) result.push({ node: tree, layout });
   for (const child of tree.children) {
     const childLayout = layout.children.find(candidate => candidate.id === child.id);
     if (child && childLayout) collect(child, childLayout, result);

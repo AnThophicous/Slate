@@ -1,13 +1,33 @@
 {
   "name": "@slate-terminal/react",
-  "version": "2.0.0",
-  "description": "Runtime declarativo TSX sem React para interfaces interativas de terminal Slate.",
-  "keywords": ["terminal-ui", "tui", "jsx", "tsx", "flexbox", "yoga", "signals", "focus", "widgets", "reconciliation", "ink-alternative"],
-  "repository": { "type": "git", "url": "https://github.com/AnThophicous/Slate.git", "directory": "packages/slate-react" },
+  "version": "2.1.0",
+  "description": "Production-grade terminal UI runtime with native TSX and optional React integration.",
+  "keywords": [
+    "terminal-ui",
+    "tui",
+    "jsx",
+    "tsx",
+    "flexbox",
+    "yoga",
+    "signals",
+    "focus",
+    "widgets",
+    "reconciliation",
+    "ink-alternative"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AnThophicous/Slate.git",
+    "directory": "packages/slate-react"
+  },
   "homepage": "https://github.com/AnThophicous/Slate/tree/main/packages/slate-react",
-  "bugs": { "url": "https://github.com/AnThophicous/Slate/issues" },
+  "bugs": {
+    "url": "https://github.com/AnThophicous/Slate/issues"
+  },
   "license": "Apache-2.0",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -29,10 +49,13 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "sideEffects": false,
   "dependencies": {
-    "@slate-terminal/core": "2.0.0"
+    "@slate-terminal/core": "2.1.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -41,10 +64,17 @@
     "test": "npm run build && npm run test:typecheck && node --test test/index.test.mjs"
   },
   "peerDependencies": {
+    "react": ">=18",
+    "react-reconciler": "^0.31.0",
     "yoga-layout": ">=3"
   },
   "peerDependenciesMeta": {
-    "yoga-layout": { "optional": true }
+    "yoga-layout": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
   },
   "publishConfig": {
     "access": "public"

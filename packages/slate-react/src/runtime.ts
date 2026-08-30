@@ -5,6 +5,7 @@ import { createSlateRoot, reconcile, type ReconcileOperation } from "./reconcile
 import { renderTreeToAnsi, type TerminalRenderOptions } from "./terminal.js";
 import { resolveTree } from "./vnode.js";
 import type { ComponentTreeNode, ElementId, EventResult, NodeProps, ReadableSignal, SlateChild, SlateEvent } from "./types.js";
+import { uuid } from "./identity.js";
 
 export interface SlateAppOptions {
   readonly viewport?: Viewport;
@@ -35,6 +36,18 @@ export interface SlateInputRouter {
 
 export interface SlateOutput {
   readonly write: (value: string) => unknown;
+}
+
+/** Creates a frame-aware output sink. Identical frames are never written. */
+export function createSlateOutput(target: SlateOutput | { write(chunk: string, ...args: never[]): unknown }): SlateOutput {
+  let previous: string | undefined;
+  return {
+    write(value: string): unknown {
+      if (value === previous) return false;
+      previous = value;
+      return target.write(value);
+    }
+  };
 }
 
 export interface TerminalControllerOptions {
@@ -102,6 +115,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   const appended = new Map<ElementId, ComponentTreeNode[]>();
   const layoutEngine = configured.layout ?? createFlexLayoutEngine();
   let viewport = normalizeViewport(configured.viewport ?? { width: 80, height: 24 });
+  let hovered: ElementId | undefined;
   let tree: ComponentTreeNode | null = null;
   let layout: LayoutTreeNode | null = null;
   let operations: readonly ReconcileOperation[] = [];
@@ -257,6 +271,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   };
 
   const dispatch = (event: SlateEvent): EventResult => {
+    event = event.id ? event : { ...event, id: uuid() };
     if (!mounted) mount();
     for (const listener of [...inputListeners]) {
       const result = listener(event, app as SlateApplication<unknown>);
@@ -275,8 +290,16 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
       ? hitTest(tree, layout, event.x, event.y)
       : focusedPath();
     const path = eventPath.length > 0 ? eventPath : tree ? [tree] : [];
-    if (event.kind === "mouse" && event.action === "press") {
-      const target = path.find(candidate => candidate.props.focusable === true);
+    if (event.kind === "mouse" && event.action === "move") {
+      const nextHovered = path.find(candidate => candidate.props.onHover !== undefined && candidate.props.disabled !== true)?.id;
+      if (nextHovered !== hovered) {
+        hovered = nextHovered;
+        const target = nextHovered === undefined || !tree ? undefined : findNode(tree, nextHovered);
+        if (target) finalizeEventResult(invokeCallback(target.props.onHover, target, event) ?? "ignored");
+      }
+    }
+    if (event.kind === "mouse" && event.action === "press" && event.button === "left") {
+      const target = path.find(candidate => candidate.props.focusable === true && candidate.props.disabled !== true);
       if (target?.props.focusable === true) focus(target.id);
     }
     for (const node of path) {
@@ -382,6 +405,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   }
 
   function handleNodeEvent(node: ComponentTreeNode, event: SlateEvent): EventResult {
+    if (node.props.disabled === true) return "consumed";
     const handler = node.props.onEvent;
     if (typeof handler === "function") {
       const result = handler(event, node);

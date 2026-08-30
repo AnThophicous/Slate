@@ -1,4 +1,4 @@
-export const VERSION = "2.0.0" as const;
+export const VERSION = "2.1.0" as const;
 
 export * from "./types.js";
 export * from "./vnode.js";
@@ -10,3 +10,11 @@ export * from "./focus.js";
 export * from "./widgets.js";
 export * from "./runtime.js";
 export * from "./terminal.js";
+export * from "./i18n.js";
+export * from "./react-renderer.js";
+export * from "./components.js";
+export * from "./high-level.js";
+export * from "./input.js";
+export * from "./scrollback.js";
+export * from "./identity.js";
+export * from "./classes.js";

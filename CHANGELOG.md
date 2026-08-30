@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.0] - 2026-08-30
+
+Slate 2.1.0 is scheduled for release today. This release adds the React
+terminal reconciler, high-level terminal APIs, reusable classes, stable node
+and event identities, richer components, and improved Unicode grapheme support.
+
 ## [2.0.0] - 2026-08-30
 
 ### Added
