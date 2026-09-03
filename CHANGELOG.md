@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `Image`, `Video` e `Media` com sources tipados, `loadMediaFile()` e saída opcional para Kitty/iTerm2; sem suporte visual, o `alt` segue no grid.
+- `createTerminalSession()` para ativar capacidades interativas com rollback e um único caminho de encerramento.
+- Captura de ponteiro para `press`/`drag`/`release`, tamanho inicial opcional da fonte e um exemplo Node mais completo.
+- Bordas reais (`single`, `double`, `rounded`, `heavy`) no renderer TSX.
+- Âncora absoluta das linhas ANSI para impedir deslocamento horizontal entre terminais.
+
+### Fixed
+
+- Falhas de input, render e output agora fecham polling, desmontam o app e tentam restaurar o terminal; `onError` e `error()` expõem o diagnóstico.
+- Feedback loops de renderização têm limite determinístico (`maxRenderPasses`) em vez de travar o processo.
+- Texto externo não consegue injetar sequências de controle ANSI no renderer TypeScript ou Rust.
+- Botões e checkboxes não tratam clique direito como ativação.
+- O deduplicador de frames permite repetir uma escrita depois de uma falha transitória.
+
 ## [2.2.0] - 2026-08-30
 
 Slate 2.2.0 is ready for release. This release hardens terminal lifecycle

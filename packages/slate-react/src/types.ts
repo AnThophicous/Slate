@@ -83,6 +83,20 @@ export interface ColorShiftEffect {
 
 export type EffectSpec = GlowEffect | ColorShiftEffect;
 
+export type MediaProtocol = "auto" | "kitty" | "iterm2" | "none";
+
+/** A media payload that can be placed in a terminal image protocol. */
+export interface MediaSource {
+  readonly data: string | Uint8Array;
+  readonly mimeType: string;
+  readonly name?: string;
+}
+
+export interface BorderSpec {
+  readonly style?: "single" | "double" | "rounded" | "heavy";
+  readonly color?: string;
+}
+
 /** Terminal attributes applied to text runs and log lines. */
 export interface TextStyle {
   readonly foreground?: string;
@@ -195,8 +209,10 @@ export interface NodeProps {
   readonly visible?: boolean;
   readonly disabled?: boolean;
   readonly focusable?: boolean;
+  readonly capturePointer?: boolean;
   readonly foreground?: string;
   readonly background?: string;
+  readonly border?: boolean | BorderSpec;
   readonly text?: SignalValue<string>;
   readonly placeholder?: SignalValue<string>;
   readonly label?: SignalValue<string>;
@@ -219,6 +235,12 @@ export interface NodeProps {
   readonly title?: SignalValue<string>;
   readonly cursor?: SignalValue<number>;
   readonly effect?: SignalValue<EffectSpec>;
+  readonly source?: MediaSource | string;
+  readonly media?: MediaSource | string;
+  readonly mimeType?: string;
+  readonly alt?: SignalValue<string>;
+  readonly protocol?: MediaProtocol;
+  readonly frames?: readonly MediaSource[];
   readonly onEvent?: EventHandler;
   readonly onKey?: EventHandler;
   readonly onMouse?: EventHandler;

@@ -3,7 +3,8 @@ import type { SlateEvent } from "./types.js";
 import type { SlateInputSource } from "./runtime.js";
 
 const keyAliases: Readonly<Record<string, string>> = {
-  esc: "Escape", escape: "Escape", return: "Enter", enter: "Enter", " ": "Space", space: "Space", spacebar: "Space",
+  esc: "Escape", escape: "Escape", return: "Enter", enter: "Enter", " ": "Space", space: "Space", spacebar: "Space", backtab: "Tab", "back-tab": "Tab",
+  bs: "Backspace", backspace: "Backspace", del: "Delete", delete: "Delete", insert: "Insert", home: "Home", end: "End", pgup: "PageUp", pageup: "PageUp", pgdn: "PageDown", pagedown: "PageDown",
   left: "ArrowLeft", arrowleft: "ArrowLeft", right: "ArrowRight", arrowright: "ArrowRight",
   up: "ArrowUp", arrowup: "ArrowUp", down: "ArrowDown", arrowdown: "ArrowDown"
 };

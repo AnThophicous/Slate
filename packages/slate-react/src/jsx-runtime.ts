@@ -1,9 +1,9 @@
 import { Block, Button, Container, Fragment, Text, jsx as createJsx, jsxDEV as createJsxDev, jsxs as createJsxs } from "./vnode.js";
-import { Checkbox, ColorShift, Form, Glow, Input, List, Modal, Progress, ScrollView, Select, Spinner, Table, Tabs } from "./widgets.js";
+import { Checkbox, ColorShift, Form, Glow, Image, Input, List, Media, Modal, Progress, ScrollView, Select, Spinner, Table, Tabs, Video } from "./widgets.js";
 import { LogView } from "./components.js";
 import type { SlateChild, SlateProps, SlateVNode } from "./types.js";
 
-export { Block, Button, Checkbox, ColorShift, Container, Form, Fragment, Glow, Input, List, LogView, Modal, Progress, ScrollView, Select, Spinner, Table, Tabs, Text };
+export { Block, Button, Checkbox, ColorShift, Container, Form, Fragment, Glow, Image, Input, List, LogView, Media, Modal, Progress, ScrollView, Select, Spinner, Table, Tabs, Text, Video };
 export const jsx = createJsx;
 export const jsxs = createJsxs;
 export const jsxDEV = createJsxDev;
@@ -31,6 +31,9 @@ export namespace JSX {
     form: SlateProps;
     glow: SlateProps;
     colorShift: SlateProps;
+    image: SlateProps;
+    video: SlateProps;
+    media: SlateProps;
     [name: string]: SlateProps;
   }
   export type ElementType = string | ((props: never) => SlateChild);

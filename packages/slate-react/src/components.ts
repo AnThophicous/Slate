@@ -1,6 +1,6 @@
 import { Block, Button, Container, Text } from "./vnode.js";
 import { Input, List, Modal } from "./widgets.js";
-import type { EventHandler, FlexDimension, LogLineValue, NodeProps, ReadableSignal, SlateChild, SlateVNode } from "./types.js";
+import type { BorderSpec, EventHandler, FlexDimension, LogLineValue, NodeProps, ReadableSignal, SlateChild, SlateVNode } from "./types.js";
 
 export interface LayoutProps extends Omit<NodeProps, "children"> {
   readonly children?: SlateChild;
@@ -24,9 +24,9 @@ export function Grid({ columns = 2, gap = 1, children, ...props }: LayoutProps &
 }
 export function Spacer(props: Omit<NodeProps, "children"> = {}): SlateVNode { return Block({ ...props, flexGrow: typeof props.flexGrow === "number" ? props.flexGrow : 1 }); }
 
-export interface PanelProps extends LayoutProps { readonly title?: SlateChild; readonly border?: boolean; }
+export interface PanelProps extends LayoutProps { readonly title?: SlateChild; readonly border?: boolean | BorderSpec; }
 export function Panel({ title, border = true, children, style, ...props }: PanelProps = {}): SlateVNode {
-  return Container({ ...props, children: [title === undefined ? null : Text({ text: String(title), foreground: props.foreground as string | undefined }), children], style: { padding: 1, ...(border ? { border: true } : {}), ...(style && typeof style === "object" ? style : {}) } });
+  return Container({ ...props, border, children: [title === undefined ? null : Text({ text: String(title), foreground: props.foreground as string | undefined }), children], style: { padding: 1, ...(style && typeof style === "object" ? style : {}) } });
 }
 export function Card(props: PanelProps = {}): SlateVNode { return Panel({ ...props, background: (props.background as string | undefined) ?? "#151a24" }); }
 export function Heading({ level = 1, children, ...props }: LayoutProps & { readonly level?: 1 | 2 | 3 }): SlateVNode {

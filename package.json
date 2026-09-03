@@ -10,7 +10,8 @@
   "workspaces": ["packages/*"],
   "engines": { "node": ">=18" },
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build --workspace @slate-terminal/core && npm run build --workspace @slate-terminal/react",
+    "build:all": "npm run build && npm run native:build",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:stress": "npm run build && node --test tests/node-stress.mjs",
