@@ -98,6 +98,6 @@ jobs:
               npm publish --workspace "$package" --access public
             fi
           }
-          publish_if_missing @slate-terminal/core 2.2.0
-          publish_if_missing @slate-terminal/react 2.2.0
-          publish_if_missing @slate-terminal/native 2.2.0
+          publish_if_missing @slate-terminal/core 2.2.1
+          publish_if_missing @slate-terminal/react 2.2.1
+          publish_if_missing @slate-terminal/native 2.2.1

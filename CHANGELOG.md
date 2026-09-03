@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-09-03
+
+This patch release ships the interactive terminal and media hardening merged
+after 2.2.0. It keeps the public API additive and includes the same
+cross-platform native package version for the Windows, Linux and macOS release
+matrix.
+
+### Included
+
+- Safer terminal lifecycle with rollback, idempotent close and cleanup on
+  input, render and output failures.
+- Deterministic render-pass limits and pointer capture for reliable interactive
+  mouse and keyboard behavior.
+- ANSI/control-sequence sanitization, absolute row anchoring and real border
+  styles to prevent corrupted or drifting terminal output.
+- Typed `Image`, `Video` and `Media` support with Kitty/iTerm2/alt-text
+  fallbacks.
+
 ### Added
 
 - `Image`, `Video` e `Media` com sources tipados, `loadMediaFile()` e saída opcional para Kitty/iTerm2; sem suporte visual, o `alt` segue no grid.

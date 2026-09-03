@@ -1,6 +1,6 @@
 {
   "name": "slate-workspace",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "private": true,
   "description": "Workspace da biblioteca Slate para interfaces interativas de terminal.",
   "keywords": ["terminal-ui", "tui", "rust", "nodejs", "typescript", "tsx", "ink-alternative", "mouse", "keyboard"],

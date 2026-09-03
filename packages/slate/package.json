@@ -1,6 +1,6 @@
 {
   "name": "@slate-terminal/core",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "API TypeScript estável para interfaces de terminal com Node.js, teclado e mouse.",
   "keywords": ["terminal-ui", "tui", "nodejs", "typescript", "tsx", "ink-alternative", "ansi", "mouse", "keyboard", "interactive-cli", "terminal-components"],
   "repository": { "type": "git", "url": "https://github.com/AnThophicous/Slate.git", "directory": "packages/slate" },
@@ -32,7 +32,7 @@
   "sideEffects": false,
   "publishConfig": { "access": "public" },
   "optionalDependencies": {
-    "@slate-terminal/native": "2.2.0"
+    "@slate-terminal/native": "2.2.1"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
