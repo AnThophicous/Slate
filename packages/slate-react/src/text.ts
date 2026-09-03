@@ -9,6 +9,14 @@ export function splitLines(value: string): string[] {
   return value.replace(/\r\n?/g, "\n").split("\n");
 }
 
+/** Removes terminal control bytes while retaining printable text and newlines. */
+export function sanitizeTerminalText(value: string): string {
+  return value
+    .replace(/\t/g, " ")
+    .replace(/\u001B(?:\[[0-?]*[ -\/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\))/gu, "")
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/gu, "");
+}
+
 export function segmentGraphemes(value: string): string[] {
   const Segmenter = (Intl as typeof Intl & {
     Segmenter?: new (locale?: string, options?: { granularity: "grapheme" }) => {

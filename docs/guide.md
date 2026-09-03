@@ -35,8 +35,8 @@ Durante o desenvolvimento local deste monorepo:
 
 ~~~powershell
 npm install
-npm run native:build
 npm run build
+npm run build:all # opcional; inclui o binding nativo e exige Rust
 ~~~
 
 O pacote @slate-terminal/native escolhe o binário da plataforma atual. Se o
@@ -193,6 +193,32 @@ try {
 Não escreva sequências ANSI de limpeza/cursor ou process.stdout.write
 diretamente em handlers de negócio. O controller já controla o primeiro frame,
 cursor, deduplicação e ordem de apresentação.
+
+### Sessão interativa segura
+
+Quando o programa controla o terminal inteiro, use a sessão de alto nível para
+que uma falha durante a ativação reverta os modos já abertos:
+
+~~~ts
+import { createTerminalSession } from "@slate-terminal/core";
+import { createTerminalController, createSlateOutput } from "@slate-terminal/react";
+
+const session = createTerminalSession();
+const terminal = createTerminalController(app, session.input,
+  createSlateOutput(process.stdout), {
+    onError: error => process.stderr.write(`Slate: ${String(error)}\\n`)
+  });
+terminal.start();
+
+// Os dois caminhos são idempotentes.
+process.once("SIGINT", () => { terminal.close(); session.close(); });
+~~~
+
+`createTerminalController` captura exceções da fonte de input e da saída,
+encerra polling, remove listeners e desmonta o app. `onError` é opcional; o
+erro também fica disponível em `controller.error()`. Uma view que invalida o
+próprio estado em ciclo é interrompida por `maxRenderPasses` (100 por padrão),
+em vez de travar o processo.
 
 ## 6. JSX sem React
 
@@ -518,7 +544,7 @@ clipping, wrapping e reset de estilo.
 ## 14. Widgets
 
 Os widgets prontos são Input, Select, Checkbox, Tabs, Table, List, ScrollView,
-Modal, Form, Progress e Spinner.
+Modal, Form, Progress, Spinner, Image, Video e Media.
 
 Widgets controlados recebem signals:
 
@@ -548,7 +574,38 @@ Input usa graphemes para apresentação, paste e IME; o cursor visual é
 calculado em células. Para um editor especializado, use
 createInputController() e conecte o controller na propriedade controller.
 
-## 15. React 18 e React 19
+## 15. Imagens e frames de vídeo
+
+O runtime pode posicionar imagens em terminais que implementam Kitty ou iTerm2.
+O grid continua renderizando o `alt` como fallback, então a interface segue
+legível em terminais sem suporte visual:
+
+~~~ts
+import { Image, Video, loadMediaFile } from "@slate-terminal/react";
+
+const cover = loadMediaFile("./assets/cover.png");
+const view = Image({ id: "cover", source: cover, width: 32, height: 12,
+  protocol: "auto", alt: "capa do projeto" });
+
+const frames = [loadMediaFile("./assets/01.png"), loadMediaFile("./assets/02.png")];
+const preview = Video({ id: "preview", frames, width: 32, height: 12,
+  protocol: "kitty", alt: "preview animado" });
+~~~
+
+`loadMediaFile` lê o arquivo local uma vez e guarda bytes tipados no source;
+uma string base64 sem data URI pode ser usada com `mimeType` no componente;
+um caminho nunca é concatenado na saída ANSI. `Video` trabalha com frames de
+imagem fornecidos pela aplicação e o controller os anima. Decodificação de
+MP4/WebM, conversão de pixels e Sixel ficam fora do core para não vender
+compatibilidade inexistente; sem um protocolo aceito, o fallback textual é o
+comportamento esperado.
+
+Controles interativos capturam o ponteiro por padrão: `press`, `drag` e
+`release` continuam chegando ao alvo mesmo quando o cursor sai da área dele.
+Defina `capturePointer: false` quando um componente precisar apenas de eventos
+locais.
+
+## 16. React 18 e React 19
 
 O adapter (createReactAdapter/createSlateReactRenderer) aceita a namespace
 React explicitamente e funciona com React 18 e React 19 sem importar React no
@@ -632,7 +689,7 @@ Não misture o JSX runtime Slate com o reconciler React na mesma árvore. JSX
 Slate produz VNodes próprios; o reconciler React espera elementos React reais.
 Escolha um caminho por root.
 
-## 16. Adaptação de renderers antigos
+## 17. Adaptação de renderers antigos
 
 Para um renderer textual legado com assinatura (text, options) => string, use
 o helper oficial do core:
@@ -684,7 +741,7 @@ Quando o renderer antigo já retorna uma árvore Slate completa, passe
 { wrap: false } e controle os IDs nessa árvore. Não duplique a camada de host
 sem necessidade.
 
-## 17. O que evitar
+## 18. O que evitar
 
 - Não use IDs aleatórios dentro de uma view que é recriada a cada signal; isso
   transforma updates simples em replace e quebra foco.
@@ -702,7 +759,7 @@ sem necessidade.
 - Não misture duas fontes que leem o mesmo input sem normalização: o mesmo
   clique pode chegar como dois aliases ou como objetos distintos.
 
-## 18. Testes e diagnóstico
+## 19. Testes e diagnóstico
 
 Validação local completa:
 
@@ -735,7 +792,7 @@ Teste separadamente layout, hit-test, resize, output e reconciler React. Um
 teste de app não deve depender de cursor físico ou de largura do terminal do
 desenvolvedor.
 
-## 19. Referência rápida da API
+## 20. Referência rápida da API
 
 Runtime: render, createApp, createSlateApp, mount, unmount, close, flush,
 getTree, getLayout, setViewport, update, append, remove, dispatch, focus, blur,

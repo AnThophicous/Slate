@@ -223,6 +223,7 @@ export interface NodeProps {
   readonly visible?: boolean;
   readonly disabled?: boolean;
   readonly focusable?: boolean;
+  readonly capturePointer?: boolean;
   readonly foreground?: Color;
   readonly background?: Color;
   readonly style?: FlexStyle;
@@ -331,24 +332,26 @@ export function hasNativeBinding(): boolean { return native() !== undefined; }
 export function version(): string { return native()?.version?.() ?? VERSION; }
 
 export function render(options: RenderOptions): string {
-  validate(options);
-  return native()?.render(options) ?? renderFallback(options);
+  const safe = { ...options, text: sanitizeTerminalText(options.text) };
+  validate(safe);
+  return native()?.render(safe) ?? renderFallback(safe);
 }
 
 export function renderText(text: string, options: Omit<RenderOptions, "text"> = {}): string {
-  const all = { ...options, text };
+  const all = { ...options, text: sanitizeTerminalText(text) };
   validate(all);
   const binding = native();
-  return binding && Object.keys(options).length === 0 ? binding.renderText(text) : binding?.render(all) ?? renderFallback(all);
+  return binding && Object.keys(options).length === 0 ? binding.renderText(all.text) : binding?.render(all) ?? renderFallback(all);
 }
 
 export function glow(text: string, options: EffectOptions): string {
   validateEffect(text, options);
   validate({ text, ...options });
   hex(options.color);
+  const safeText = sanitizeTerminalText(text);
   const binding = native();
-  if (binding?.renderGlow) return binding.renderGlow({ text, color: hex(options.color), to: options.to === undefined ? undefined : hex(options.to), width: options.width, height: options.height, x: options.x, y: options.y, radius: options.radius, intensity: options.intensity, elapsedMs: options.elapsedMs });
-  return render({ text, foreground: hex(options.color), width: options.width, height: options.height, x: options.x, y: options.y });
+  if (binding?.renderGlow) return binding.renderGlow({ text: safeText, color: hex(options.color), to: options.to === undefined ? undefined : hex(options.to), width: options.width, height: options.height, x: options.x, y: options.y, radius: options.radius, intensity: options.intensity, elapsedMs: options.elapsedMs });
+  return render({ text: safeText, foreground: hex(options.color), width: options.width, height: options.height, x: options.x, y: options.y });
 }
 
 export function colorShift(text: string, options: EffectOptions & { readonly to: Color }): string {
@@ -356,9 +359,10 @@ export function colorShift(text: string, options: EffectOptions & { readonly to:
   validate({ text, ...options });
   hex(options.color);
   hex(options.to);
+  const safeText = sanitizeTerminalText(text);
   const binding = native();
-  if (binding?.renderColorShift) return binding.renderColorShift({ text, color: hex(options.color), to: hex(options.to), width: options.width, height: options.height, x: options.x, y: options.y, elapsedMs: options.elapsedMs });
-  return render({ text, foreground: hex(options.to), width: options.width, height: options.height, x: options.x, y: options.y });
+  if (binding?.renderColorShift) return binding.renderColorShift({ text: safeText, color: hex(options.color), to: hex(options.to), width: options.width, height: options.height, x: options.x, y: options.y, elapsedMs: options.elapsedMs });
+  return render({ text: safeText, foreground: hex(options.to), width: options.width, height: options.height, x: options.x, y: options.y });
 }
 
 export function hex(value: string): Color {
@@ -418,24 +422,76 @@ export function showCursor(): void { native()?.showCursor?.(); }
 /** Restores cursor, raw mode, mouse/paste/focus capture and alternate screen. */
 export function closeTerminal(): void { native()?.closeTerminal?.(); }
 export function pollEvent(timeoutMs = 16): SlateEvent | null { return native()?.pollEvent?.(timeoutMs) ?? null; }
-export function createInputSource(): { readonly poll: (timeoutMs?: number) => SlateEvent | null; readonly close: () => void } {
-  return { poll: pollEvent, close: closeTerminal };
+export interface TerminalSessionOptions {
+  readonly alternateScreen?: boolean;
+  readonly rawMode?: boolean;
+  readonly mouse?: boolean;
+  readonly bracketedPaste?: boolean;
+  readonly focusChange?: boolean;
+}
+
+export interface TerminalSession {
+  readonly input: ReturnType<typeof createInputSource>;
+  readonly close: () => void;
+}
+
+/** Opens all interactive terminal capabilities atomically and supplies one cleanup path. */
+export function createTerminalSession(options: TerminalSessionOptions = {}): TerminalSession {
+  const enabled = {
+    alternateScreen: options.alternateScreen ?? true,
+    rawMode: options.rawMode ?? true,
+    mouse: options.mouse ?? true,
+    bracketedPaste: options.bracketedPaste ?? true,
+    focusChange: options.focusChange ?? true
+  };
+  try {
+    if (enabled.alternateScreen) enableAlternateScreen();
+    if (enabled.rawMode) enableRawMode();
+    if (enabled.mouse) enableMouseCapture();
+    if (enabled.bracketedPaste) enableBracketedPaste();
+    if (enabled.focusChange) enableFocusChange();
+  } catch (error) {
+    try { closeTerminal(); } catch { /* rollback is best effort */ }
+    throw error;
+  }
+  const input = createInputSource();
+  let closed = false;
+  return {
+    input,
+    close: () => {
+      if (closed) return;
+      closed = true;
+      try { input.close(); } catch { try { closeTerminal(); } catch { /* terminal may already be gone */ } }
+    }
+  };
+}
+
+export function createInputSource(): { readonly poll: (timeoutMs?: number) => SlateEvent | null; readonly close: () => void; readonly size: () => { readonly width: number; readonly height: number } } {
+  return { poll: pollEvent, close: closeTerminal, size: terminalSize };
+}
+
+function terminalSize(): { readonly width: number; readonly height: number } {
+  const processLike = (globalThis as typeof globalThis & { process?: { stdout?: { columns?: number; rows?: number } } }).process;
+  return {
+    width: Number.isFinite(processLike?.stdout?.columns) ? Math.max(0, Math.trunc(processLike?.stdout?.columns as number)) : 80,
+    height: Number.isFinite(processLike?.stdout?.rows) ? Math.max(0, Math.trunc(processLike?.stdout?.rows as number)) : 24
+  };
 }
 
 export function createContainer(props: NodeProps = {}): SlateNode { return createNode("container", props); }
 export function createBlock(props: NodeProps = {}): SlateNode { return createNode("block", props); }
-export function createButton(props: NodeProps = {}): SlateNode { return createNode("button", { ...props, focusable: props.focusable ?? true }); }
+export function createButton(props: NodeProps = {}): SlateNode { return createNode("button", { ...props, focusable: props.focusable ?? true, capturePointer: props.capturePointer ?? true }); }
 export function createText(props: NodeProps = {}): SlateNode { return createNode("text", props); }
-export function createInput(props: NodeProps = {}): SlateNode { return createNode("input", { ...props, focusable: props.focusable ?? true }); }
-export function createSelect(props: NodeProps = {}): SlateNode { return createNode("select", { ...props, focusable: props.focusable ?? true }); }
-export function createCheckbox(props: NodeProps = {}): SlateNode { return createNode("checkbox", { ...props, focusable: props.focusable ?? true }); }
-export function createTabs(props: NodeProps = {}): SlateNode { return createNode("tabs", { ...props, focusable: props.focusable ?? true }); }
+export function createInput(props: NodeProps = {}): SlateNode { return createNode("input", { ...props, focusable: props.focusable ?? true, capturePointer: props.capturePointer ?? true }); }
+export function createSelect(props: NodeProps = {}): SlateNode { return createNode("select", { ...props, focusable: props.focusable ?? true, capturePointer: props.capturePointer ?? true }); }
+export function createCheckbox(props: NodeProps = {}): SlateNode { return createNode("checkbox", { ...props, focusable: props.focusable ?? true, capturePointer: props.capturePointer ?? true }); }
+export function createTabs(props: NodeProps = {}): SlateNode { return createNode("tabs", { ...props, focusable: props.focusable ?? true, capturePointer: props.capturePointer ?? true }); }
 export function createTable(props: NodeProps = {}): SlateNode { return createNode("table", props); }
 export function createSpinner(props: NodeProps = {}): SlateNode { return createNode("spinner", props); }
 export function createProgress(props: NodeProps = {}): SlateNode { return createNode("progress", props); }
 export function createModal(props: NodeProps = {}): SlateNode { return createNode("modal", props); }
-export function createScrollView(props: NodeProps = {}): SlateNode { return createNode("scrollView", { ...props, overflow: props.overflow ?? "scroll" }); }
-export function createList(props: NodeProps = {}): SlateNode { return createNode("list", props); }
+export function createScrollView(props: NodeProps = {}): SlateNode { return createNode("scrollView", { ...props, overflow: props.overflow ?? "scroll", capturePointer: props.capturePointer ?? true }); }
+export function createList(props: NodeProps = {}): SlateNode { return createNode("list", { ...props, capturePointer: props.capturePointer ?? true }); }
 export function createForm(props: NodeProps = {}): SlateNode { return createNode("form", props); }
 
 export function Container(props: NodeProps = {}): SlateNode { return createContainer(props); }
@@ -464,6 +520,7 @@ export class SlateApp<S = unknown> {
   readonly root: SlateNode;
   private focusedId: ElementId | undefined;
   private hoveredId: ElementId | undefined;
+  private pointerCapturedId: ElementId | undefined;
   private stateValue: S | undefined;
   private readonly stateListeners = new Set<() => void>();
 
@@ -544,13 +601,17 @@ export class SlateApp<S = unknown> {
     const [removed] = parent.children.splice(index, 1);
     if (this.focusedId !== undefined && !this.find(this.focusedId)) this.focusedId = undefined;
     if (this.hoveredId !== undefined && !this.find(this.hoveredId)) this.hoveredId = undefined;
+    if (this.pointerCapturedId !== undefined && !this.find(this.pointerCapturedId)) this.pointerCapturedId = undefined;
     return removed;
   }
   setText(id: ElementId, text: string): boolean { return this.update(id, { text }); }
   setPlaceholder(id: ElementId, placeholder: string): boolean { return this.update(id, { placeholder }); }
   setForeground(id: ElementId, foreground: Color): boolean { return this.update(id, { foreground: foreground === "default" ? foreground : hex(foreground) }); }
   dispatch(event: SlateEvent): EventResult {
-    if (event.kind === "key" && event.phase !== "release" && isCtrlC(event)) return "exit";
+    if (event.kind === "key" && event.phase !== "release" && isCtrlC(event)) {
+      this.pointerCapturedId = undefined;
+      return "exit";
+    }
     if (event.kind === "key" && event.phase !== "release" && event.code === "Tab") {
       this.focusNext((event.modifiers ?? 0) & 1 ? true : false);
       return "consumed";
@@ -558,14 +619,20 @@ export class SlateApp<S = unknown> {
     const pointMouse = event.kind === "mouse" && event.x !== undefined && event.y !== undefined;
     const mouseX = event.x;
     const mouseY = event.y;
-    const path = pointMouse && mouseX !== undefined && mouseY !== undefined ? hitPath(this.root, mouseX, mouseY) : this.focusedId === undefined ? [this.root] : pathTo(this.root, this.focusedId) ?? [this.root];
+    const hit = pointMouse && mouseX !== undefined && mouseY !== undefined ? hitPath(this.root, mouseX, mouseY) : [];
+    const capturedNode = pointMouse && this.pointerCapturedId !== undefined ? this.find(this.pointerCapturedId) : undefined;
+    if (capturedNode?.props.visible === false || capturedNode?.props.disabled === true) this.pointerCapturedId = undefined;
+    const captured = pointMouse && this.pointerCapturedId !== undefined ? pathTo(this.root, this.pointerCapturedId) : undefined;
+    const path = pointMouse ? captured ?? hit : this.focusedId === undefined ? [this.root] : pathTo(this.root, this.focusedId) ?? [this.root];
     if (pointMouse) event = { ...event, target: path[0]?.id };
     if (event.kind === "mouse" && event.action === "press") {
       const target = path.find(node => node.props.focusable === true && node.props.disabled !== true);
       if (target) this.focus(target.id);
+      const capture = path.find(node => node.props.capturePointer === true) ?? target;
+      if (capture && capture.props.disabled !== true) this.pointerCapturedId = capture.id;
     }
     if (event.kind === "mouse" && event.action === "move") {
-      const nextHovered = path.find(node => node.props.onHover !== undefined && node.props.disabled !== true)?.id;
+      const nextHovered = hit.find(node => node.props.onHover !== undefined && node.props.disabled !== true)?.id;
       if (nextHovered !== this.hoveredId) {
         const previousHovered = this.hoveredId;
         this.hoveredId = nextHovered;
@@ -579,23 +646,27 @@ export class SlateApp<S = unknown> {
         if (hoverResult !== "ignored") return hoverResult;
       }
     }
-    for (const node of path) {
-      if (node.props.disabled === true) continue;
-      const result = node.props.onEvent?.(event, node);
-      if (result && result !== "ignored") return result;
-      const specific = event.kind === "key" ? node.props.onKey : event.kind === "mouse" ? node.props.onMouse : event.kind === "paste" ? node.props.onPaste : event.kind === "resize" ? node.props.onResize : event.kind === "ime" ? node.props.onIme : undefined;
-      const specificResult = specific?.(event, node);
-      if (specificResult && specificResult !== "ignored") return specificResult;
-      const activatesButton = node.kind === "button" && ((event.kind === "mouse" && event.action === "press") || (event.kind === "key" && event.phase !== "release" && (event.code === "Enter" || event.code === " " || event.code === "Space")));
-      if (activatesButton) {
-        const pressed = node.props.onPress?.(event, node);
-        if (pressed && pressed !== "ignored") return pressed;
-        return "render";
+    try {
+      for (const node of path) {
+        if (node.props.disabled === true) continue;
+        const result = node.props.onEvent?.(event, node);
+        if (result && result !== "ignored") return result;
+        const specific = event.kind === "key" ? node.props.onKey : event.kind === "mouse" ? node.props.onMouse : event.kind === "paste" ? node.props.onPaste : event.kind === "resize" ? node.props.onResize : event.kind === "ime" ? node.props.onIme : undefined;
+        const specificResult = specific?.(event, node);
+        if (specificResult && specificResult !== "ignored") return specificResult;
+        const activatesButton = node.kind === "button" && ((event.kind === "mouse" && event.action === "press" && (event.button === undefined || event.button === "left")) || (event.kind === "key" && event.phase !== "release" && (event.code === "Enter" || event.code === " " || event.code === "Space")));
+        if (activatesButton) {
+          const pressed = node.props.onPress?.(event, node);
+          if (pressed && pressed !== "ignored") return pressed;
+          return "render";
+        }
+        const widgetResult = dispatchWidget(node, event);
+        if (widgetResult !== "ignored") return widgetResult;
       }
-      const widgetResult = dispatchWidget(node, event);
-      if (widgetResult !== "ignored") return widgetResult;
+      return "ignored";
+    } finally {
+      if (event.kind === "mouse" && event.action === "release") this.pointerCapturedId = undefined;
     }
-    return "ignored";
   }
   render(options: Omit<RenderOptions, "text"> = {}): string { return renderNode(this.root, options); }
 }
@@ -678,7 +749,7 @@ function focusableIds(node: SlateNode): ElementId[] {
 
 function dispatchWidget(node: SlateNode, event: SlateEvent): EventResult {
   if (node.kind === "input") return dispatchInput(node, event);
-  if (node.kind === "checkbox" && ((event.kind === "key" && event.phase !== "release" && (event.code === " " || event.code === "Space" || event.code === "Enter")) || (event.kind === "mouse" && event.action === "press"))) {
+  if (node.kind === "checkbox" && ((event.kind === "key" && event.phase !== "release" && (event.code === " " || event.code === "Space" || event.code === "Enter")) || (event.kind === "mouse" && event.action === "press" && (event.button === undefined || event.button === "left")))) {
     const next = !Boolean(readValue(node.props.checked));
     const result = node.props.onChange?.(next, node);
     if (result && result !== "ignored") return result;
@@ -830,6 +901,10 @@ function renderFallback(options: RenderOptions): string {
     output += `\x1b[${row + 1};${x + 1}H${foreground}${background}${truncateDisplay(line, Math.max(0, width - x))}`;
   }
   return `${output}\x1b[0m`;
+}
+
+function sanitizeTerminalText(value: string): string {
+  return value.replace(/\t/g, " ").replace(/\u001B(?:\[[0-?]*[ -\/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\))/gu, "").replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/gu, "");
 }
 
 function wrapDisplay(value: string, maxWidth: number): string[] {

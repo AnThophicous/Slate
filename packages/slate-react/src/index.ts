@@ -10,6 +10,7 @@ export * from "./focus.js";
 export * from "./widgets.js";
 export * from "./runtime.js";
 export * from "./terminal.js";
+export * from "./media.js";
 export * from "./i18n.js";
 export * from "./react-renderer.js";
 export * from "./components.js";

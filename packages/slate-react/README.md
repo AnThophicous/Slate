@@ -35,12 +35,13 @@ Exports principais:
 - layout: `createFlexLayoutEngine`, `createYogaLayoutEngine`;
 - entrada: `createInputRouter`, `createNormalizedInput`, `normalizeEvent`, `sameEvent`, `useInput`, `useFocus`, `useFocusManager`, `useCursor`, `useWindowSize`;
 - componentes: `Container`, `Block`, `Text`, `Button`, `Input`, `Select`, `Checkbox`, `Tabs`, `Table`, `Spinner`, `Progress`, `Modal`, `ScrollView`, `List`, `Form`, `Glow`, `ColorShift`;
+- mídia: `Image`, `Video`, `Media`, `loadMediaFile`, `createMediaSource`, `renderMedia` (Kitty/iTerm2 com fallback textual);
 - apresentação: `LogView`, `TextStyle`, `LogLine`, `LogRun`, `wrapText`;
 - infraestrutura: `resolveTree`, `reconcile`, `createSlateRoot`, `renderTreeToAnsi`.
 
 Callbacks use the `ignored`, `consumed`, `render`, or `exit` contract. IDs are unique per tree and stable during reconciliation. `createSlateOutput` suppresses duplicate frames; direct writes remain available for integrations that need them.
 
-`createTerminalController` expõe `stop`, `close` e `dispose`. `Ctrl+C` é
+`createTerminalController` expõe `stop`, `close`, `dispose` e `error`. `Ctrl+C` é
 reservado como saída de emergência e fecha o controller antes de chamar
 `onExit`; `closeTerminal()` do core restaura os modos nativos.
 
@@ -95,6 +96,18 @@ expected line. `createReactAdapter(React)` remains the simpler bridge when
 React should only consume Slate nodes, including React 18 applications that do
 not need a terminal reconciler.
 
+`onError` recebe falhas da fonte, do renderer e do output. O controller fecha o
+polling e a árvore antes de retornar ao processo; a função é protegida para
+que um logger com defeito não impeça a limpeza. `maxRenderPasses` interrompe
+feedback loops de composição com uma mensagem determinística.
+
 `Glow` e `ColorShift` podem envolver texto ou ser usados como `effect` em qualquer nó. O controller anima efeitos e spinners em até 60 FPS por padrão; use `animationFps: 0` para desativar a agenda automática.
+
+Para mídia, prefira `loadMediaFile("./cover.png")` e passe o resultado a
+`Image`. A camada de protocolo é opt-in ou pode usar `mediaProtocol: "auto"`;
+quando não há suporte, Slate mantém o `alt` no grid. Uma string base64 sem data
+URI pode ser usada com `mimeType` no componente. `Video` reproduz frames
+de imagem fornecidos pela aplicação e não promete decodificar containers de
+vídeo.
 
 Use `createI18n` for application and widget translations. It provides locale fallback to English and does not impose a translation framework.

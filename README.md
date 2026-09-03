@@ -14,6 +14,11 @@ npm install @slate-terminal/core @slate-terminal/react @slate-terminal/native
 
 O pacote nativo contém os bindings N-API para o sistema operacional publicado. Durante o desenvolvimento local, `npm run native:build` compila o addon para a plataforma atual.
 
+Para uma sessão interativa, `createTerminalSession()` habilita alternate screen,
+raw mode, mouse, paste e focus change como uma operação com rollback. O objeto
+retornado tem `input` e um `close()` idempotente; passe `input` ao
+`createTerminalController()`.
+
 O [guia de produção](docs/guide.md) é a referência aprofundada: explica o
 modelo Mosaic, ciclo de vida, encerramento, mouse/hit-test, eventos, foco,
 wrapping por grapheme, `LogView`, integração React 18/19, adaptação de APIs
@@ -67,7 +72,7 @@ O layout portátil cobre `row` e `column`, `flexGrow`, `flexShrink`, `flexBasis`
 
 Os sinais `signal`, `computed`, `effect`, `batch` e `untracked` permitem reatividade sem React. Sinais usados na composição reconstroem a árvore necessária; sinais usados em propriedades visuais atualizam apresentação e layout sem forçar uma reconstrução completa. `frameRate` limita commits assíncronos quando uma interface precisa de uma cadência controlada.
 
-Componentes prontos: `Container`, `Block`, `Text`, `Button`, `Input`, `Select`, `Checkbox`, `Tabs`, `Table`, `Spinner`, `Progress`, `Modal`, `ScrollView`, `List`, `Form`, `Glow` e `ColorShift`.
+Componentes prontos: `Container`, `Block`, `Text`, `Button`, `Input`, `Select`, `Checkbox`, `Tabs`, `Table`, `Spinner`, `Progress`, `Modal`, `ScrollView`, `List`, `Form`, `Glow`, `ColorShift`, `Image`, `Video` e `Media`.
 
 Foco e entrada incluem navegação por Tab/Shift+Tab, mouse por hit-test de layout, atalhos via `onEvent`, paste, IME, cursor, resize e um `createInputRouter` para conectar qualquer fonte síncrona de eventos. `useInput`, `useFocus`, `useFocusManager`, `useCursor` e `useWindowSize` são helpers agnósticos de React.
 
@@ -85,6 +90,13 @@ semanticamente iguais. `LogView` aceita tanto `string` quanto linhas com
 As cores customizadas usam `#RGB` ou `#RRGGBB`. O renderer preserva UTF-8 e calcula largura de glifos para texto largo.
 
 `Glow` e `ColorShift` podem envolver texto ou ser declarados em `effect`; a interpolação é feita por glifo e `createTerminalController` agenda a animação sem emitir frames idênticos.
+
+Imagens podem ser carregadas com `loadMediaFile()` e renderizadas com
+`Image({ source, width, height, protocol: "kitty" | "iterm2" })`. Em
+terminais sem protocolo de imagem o alt text permanece visível. Uma string
+base64 também pode ser usada diretamente com `mimeType`. `Video` aceita
+uma sequência de `frames` (imagens); decodificação de MP4/WebM não é embutida no
+core para evitar um codec falso ou uma dependência nativa obrigatória.
 
 ## Rust
 
@@ -114,7 +126,8 @@ A linha 2.x evolui de forma aditiva. APIs existentes não são removidas nem mud
 
 ```powershell
 npm install
-npm run build
+npm run build             # TypeScript/JavaScript, não exige Rust
+npm run build:all         # TypeScript/JavaScript + binding nativo
 npm run typecheck
 npm test
 npm run benchmark

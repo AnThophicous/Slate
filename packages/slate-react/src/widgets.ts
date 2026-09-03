@@ -44,6 +44,14 @@ export interface ColorShiftProps extends Omit<NodeProps, "effect"> {
   readonly speed?: number;
 }
 
+export interface MediaProps extends Omit<NodeProps, "source" | "media" | "frames"> {
+  readonly source?: NodeProps["source"];
+  readonly media?: NodeProps["media"];
+  readonly frames?: NodeProps["frames"];
+  readonly mimeType?: string;
+  readonly alt?: string | import("./types.js").ReadableSignal<string>;
+}
+
 export interface InputController {
   readonly value: WritableSignal<string>;
   readonly cursor: WritableSignal<number>;
@@ -66,19 +74,19 @@ export interface TabsController {
 }
 
 export function Input(props: InputProps = {}): SlateVNode {
-  return createElement<SlateProps>("input", { ...props, onChange: props.onChange as NodeProps["onChange"], focusable: (props.focusable as boolean | undefined) ?? true });
+  return createElement<SlateProps>("input", { ...props, onChange: props.onChange as NodeProps["onChange"], focusable: (props.focusable as boolean | undefined) ?? true, capturePointer: props.capturePointer as boolean | undefined ?? true });
 }
 
 export function Select(props: SelectProps = {}): SlateVNode {
-  return createElement<SlateProps>("select", { ...props, options: props.options ?? [], onChange: props.onChange as NodeProps["onChange"], focusable: (props.focusable as boolean | undefined) ?? true });
+  return createElement<SlateProps>("select", { ...props, options: props.options ?? [], onChange: props.onChange as NodeProps["onChange"], focusable: (props.focusable as boolean | undefined) ?? true, capturePointer: props.capturePointer as boolean | undefined ?? true });
 }
 
 export function Checkbox(props: CheckboxProps = {}): SlateVNode {
-  return createElement<SlateProps>("checkbox", { ...props, onChange: props.onChange as NodeProps["onChange"], focusable: (props.focusable as boolean | undefined) ?? true });
+  return createElement<SlateProps>("checkbox", { ...props, onChange: props.onChange as NodeProps["onChange"], focusable: (props.focusable as boolean | undefined) ?? true, capturePointer: props.capturePointer as boolean | undefined ?? true });
 }
 
 export function Tabs(props: TabsProps = {}): SlateVNode {
-  return createElement<SlateProps>("tabs", { ...props, tabs: props.tabs ?? [], onChange: props.onChange as NodeProps["onChange"], focusable: (props.focusable as boolean | undefined) ?? true });
+  return createElement<SlateProps>("tabs", { ...props, tabs: props.tabs ?? [], onChange: props.onChange as NodeProps["onChange"], focusable: (props.focusable as boolean | undefined) ?? true, capturePointer: props.capturePointer as boolean | undefined ?? true });
 }
 
 export function Table(props: NodeProps = {}): SlateVNode {
@@ -98,11 +106,11 @@ export function Modal(props: NodeProps = {}): SlateVNode {
 }
 
 export function ScrollView(props: NodeProps = {}): SlateVNode {
-  return createElement<SlateProps>("scrollView", { ...props, overflow: props.overflow ?? "scroll", focusable: props.focusable ?? true });
+  return createElement<SlateProps>("scrollView", { ...props, overflow: props.overflow ?? "scroll", focusable: props.focusable ?? true, capturePointer: props.capturePointer as boolean | undefined ?? true });
 }
 
 export function List(props: ListProps = {}): SlateVNode {
-  return createElement<SlateProps>("list", { ...props, focusable: (props.focusable as boolean | undefined) ?? true, onChange: props.onChange as NodeProps["onChange"] });
+  return createElement<SlateProps>("list", { ...props, focusable: (props.focusable as boolean | undefined) ?? true, capturePointer: props.capturePointer as boolean | undefined ?? true, onChange: props.onChange as NodeProps["onChange"] });
 }
 
 export function Form(props: NodeProps = {}): SlateVNode {
@@ -115,6 +123,21 @@ export function Glow(props: GlowProps): SlateVNode {
 
 export function ColorShift(props: ColorShiftProps): SlateVNode {
   return createElement<SlateProps>("colorShift", { ...props, effect: { kind: "colorShift", from: props.from, to: props.to, speed: props.speed } });
+}
+
+/** Renders an image when the selected terminal protocol supports it. */
+export function Image(props: MediaProps = {}): SlateVNode {
+  return createElement<SlateProps>("image", { ...props, alt: props.alt ?? "image" });
+}
+
+/** Renders a video frame sequence; codecs are intentionally outside Slate's core. */
+export function Video(props: MediaProps = {}): SlateVNode {
+  return createElement<SlateProps>("video", { ...props, alt: props.alt ?? "video" });
+}
+
+/** Generic media host for applications that choose the media kind at runtime. */
+export function Media(props: MediaProps = {}): SlateVNode {
+  return createElement<SlateProps>("media", props);
 }
 
 export function createInputController(initial = ""): InputController {
@@ -249,6 +272,10 @@ export function widgetText(node: ComponentTreeNode, frameIndex = 0): string[] {
     const title = String(readWidgetValue(props.title) ?? "");
     const width = Math.max(4, readWidgetNumber(props.width) || title.length + 4);
     return [`\u250c ${title} \u2510`, "\u2514" + "\u2500".repeat(Math.max(1, width - 2)) + "\u2518"];
+  }
+  if (node.type === "image" || node.type === "video" || node.type === "media") {
+    const alt = String(readWidgetValue(props.alt) ?? (node.type === "video" ? "video" : "image"));
+    return [`[${alt}]`];
   }
   if (node.type === "text" || node.type === "block" || node.type === "button" || node.type === "glow" || node.type === "colorShift") return [String(node.type === "button" ? readWidgetValue(props.label) ?? readWidgetValue(props.text) ?? "" : readWidgetValue(props.text) ?? readWidgetValue(props.label) ?? readWidgetValue(props.placeholder) ?? "")];
   return [];

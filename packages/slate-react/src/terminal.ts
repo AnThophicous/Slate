@@ -1,7 +1,8 @@
 import { isSignal } from "./reactive.js";
-import { graphemeWidth, segmentGraphemes, splitLines, wrapText } from "./text.js";
+import { graphemeWidth, sanitizeTerminalText, segmentGraphemes, splitLines, wrapText } from "./text.js";
 import { widgetText } from "./widgets.js";
-import type { ComponentTreeNode, EffectSpec, TextStyle } from "./types.js";
+import { renderMedia } from "./media.js";
+import type { BorderSpec, ComponentTreeNode, EffectSpec, MediaSource, TextStyle } from "./types.js";
 import type { LayoutRect, LayoutTreeNode, Viewport } from "./flex.js";
 
 export interface TerminalRenderOptions {
@@ -11,6 +12,7 @@ export interface TerminalRenderOptions {
   readonly frameIndex?: number;
   readonly defaultForeground?: string;
   readonly defaultBackground?: string;
+  readonly mediaProtocol?: "auto" | "kitty" | "iterm2" | "none";
   readonly cursor?: { readonly x: number; readonly y: number; readonly visible?: boolean };
 }
 
@@ -67,7 +69,7 @@ export function renderTreeToAnsi(tree: ComponentTreeNode | null, layout: LayoutT
   if (options.clear !== false) output.push("\u001b[2J");
   output.push("\u001b[H");
   if (options.hideCursor !== false) output.push("\u001b[?25l");
-  for (const row of cells) {
+  for (const [rowIndex, row] of cells.entries()) {
     let previous: TerminalStyle = {
       foreground: undefined,
       background: undefined,
@@ -93,7 +95,14 @@ export function renderTreeToAnsi(tree: ComponentTreeNode | null, layout: LayoutT
     }
     if (previous.link !== undefined) line += hyperlinkCode();
     if (hasStyle(previous)) line += "\u001b[0m";
-    output.push(line);
+    // Do not rely on LF preserving column zero: terminals differ when a row
+    // reaches the right edge and may leave the next row horizontally shifted.
+    output.push(rowIndex === 0 ? line : `\u001b[${rowIndex + 1};1H${line}`);
+  }
+  const mediaOutput = collectMedia(tree, layout, options.mediaProtocol ?? "auto", options.frameIndex ?? 0);
+  if (mediaOutput.length > 0) {
+    output.push(...mediaOutput);
+    output.push("\u001b[H");
   }
   if (options.restoreCursor) output.push("\u001b[?25h");
   if (options.cursor) {
@@ -130,9 +139,10 @@ function paint(tree: ComponentTreeNode, layout: LayoutTreeNode, cells: Cell[][],
   };
   const effect = readEffect(tree.props.effect) ?? inheritedEffect;
   fill(cells, layout.layout, clip, style);
-  const lines = widgetText(tree, frameIndex).flatMap(line => tree.props.wrapText === false
-    ? splitLines(line)
-    : wrapText(line, layout.content.width));
+  const lines = widgetText(tree, frameIndex).flatMap(line => {
+    const safe = sanitizeTerminalText(line);
+    return tree.props.wrapText === false ? splitLines(safe) : wrapText(safe, layout.content.width);
+  });
   const origin = layout.content;
   for (let index = 0; index < lines.length; index += 1) {
     drawText(cells, origin.x, origin.y + index, lines[index] ?? "", clip, style, effect, frameIndex, index);
@@ -141,6 +151,89 @@ function paint(tree: ComponentTreeNode, layout: LayoutTreeNode, cells: Cell[][],
     const child = tree.children.find(candidate => candidate.id === childLayout.id);
     if (child) paint(child, childLayout, cells, clip, style, frameIndex, effect);
   }
+  drawBorder(cells, layout.layout, clip, style, tree.props.border);
+}
+
+function collectMedia(tree: ComponentTreeNode | null, layout: LayoutTreeNode | null, protocol: "auto" | "kitty" | "iterm2" | "none", frameIndex: number): string[] {
+  if (!tree || !layout) return [];
+  const output: string[] = [];
+  if (tree.type === "image" || tree.type === "video" || tree.type === "media") {
+    const frames = Array.isArray(tree.props.frames) ? tree.props.frames : [];
+    const source = tree.type === "video" && frames.length > 0
+      ? frames[frameIndex % frames.length]
+      : readMediaValue(tree.props.source ?? tree.props.media, tree.props.mimeType);
+    const rendered = renderMedia(source, {
+      x: layout.content.x,
+      y: layout.content.y,
+      width: layout.content.width,
+      height: layout.content.height,
+      protocol: tree.props.protocol === "auto" || tree.props.protocol === "kitty" || tree.props.protocol === "iterm2" || tree.props.protocol === "none" ? tree.props.protocol : protocol
+    });
+    if (rendered) output.push(rendered);
+  }
+  for (const childLayout of layout.children) {
+    const child = tree.children.find(candidate => candidate.id === childLayout.id);
+    if (child) output.push(...collectMedia(child, childLayout, protocol, frameIndex));
+  }
+  return output;
+}
+
+function readMediaValue(value: unknown, mimeType: unknown): MediaSource | string | undefined {
+  if (typeof value === "string" && typeof mimeType === "string" && isMimeType(mimeType)) {
+    return { data: value, mimeType: mimeType.toLowerCase() };
+  }
+  if (typeof value === "string") return value;
+  if (!isRecord(value)) return undefined;
+  return value as unknown as MediaSource;
+}
+
+function isMimeType(value: string): boolean {
+  return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/iu.test(value);
+}
+
+function drawBorder(cells: Cell[][], rect: LayoutRect, clip: LayoutRect, inherited: TerminalStyle, value: unknown): void {
+  const border = normalizeBorder(value);
+  if (!border || rect.width < 1 || rect.height < 1) return;
+  const glyphs = borderGlyphs(border.style);
+  const style = border.color ? { ...inherited, foreground: normalizeHex(border.color) ?? inherited.foreground } : inherited;
+  const left = rect.x;
+  const top = rect.y;
+  const right = rect.x + rect.width - 1;
+  const bottom = rect.y + rect.height - 1;
+  setCell(cells, left, top, glyphs.topLeft, clip, style);
+  setCell(cells, right, top, glyphs.topRight, clip, style);
+  setCell(cells, left, bottom, glyphs.bottomLeft, clip, style);
+  setCell(cells, right, bottom, glyphs.bottomRight, clip, style);
+  for (let x = left + 1; x < right; x += 1) {
+    setCell(cells, x, top, glyphs.horizontal, clip, style);
+    if (bottom !== top) setCell(cells, x, bottom, glyphs.horizontal, clip, style);
+  }
+  for (let y = top + 1; y < bottom; y += 1) {
+    setCell(cells, left, y, glyphs.vertical, clip, style);
+    if (right !== left) setCell(cells, right, y, glyphs.vertical, clip, style);
+  }
+}
+
+function setCell(cells: Cell[][], x: number, y: number, char: string, clip: LayoutRect, style: TerminalStyle): void {
+  if (x < clip.x || y < clip.y || x >= clip.x + clip.width || y >= clip.y + clip.height) return;
+  const cell = cells[y]?.[x];
+  if (!cell) return;
+  cell.char = char;
+  applyStyle(cell, style);
+}
+
+function normalizeBorder(value: unknown): BorderSpec | undefined {
+  if (value === true) return { style: "single" };
+  if (!isRecord(value)) return undefined;
+  const style = value.style === "single" || value.style === "double" || value.style === "rounded" || value.style === "heavy" ? value.style : "single";
+  return { style, color: typeof value.color === "string" ? value.color : undefined };
+}
+
+function borderGlyphs(style: BorderSpec["style"]): { readonly topLeft: string; readonly topRight: string; readonly bottomLeft: string; readonly bottomRight: string; readonly horizontal: string; readonly vertical: string } {
+  if (style === "double") return { topLeft: "╔", topRight: "╗", bottomLeft: "╚", bottomRight: "╝", horizontal: "═", vertical: "║" };
+  if (style === "rounded") return { topLeft: "╭", topRight: "╮", bottomLeft: "╰", bottomRight: "╯", horizontal: "─", vertical: "│" };
+  if (style === "heavy") return { topLeft: "┏", topRight: "┓", bottomLeft: "┗", bottomRight: "┛", horizontal: "━", vertical: "┃" };
+  return { topLeft: "┌", topRight: "┐", bottomLeft: "└", bottomRight: "┘", horizontal: "─", vertical: "│" };
 }
 
 function fill(cells: Cell[][], rect: LayoutRect, clip: LayoutRect, style: TerminalStyle): void {

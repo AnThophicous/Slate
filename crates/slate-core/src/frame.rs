@@ -119,9 +119,12 @@ impl Frame {
     }
 
     pub fn write_text(&mut self, origin: Point, text: &str, style: Style) {
+        // Text is data, never terminal control. Keep line breaks but prevent a
+        // caller-provided ESC/C1 byte from escaping into the ANSI renderer.
+        let sanitized = sanitize_terminal_text(text);
         let mut x = origin.x();
         let mut y = origin.y();
-        for grapheme in text.graphemes(true) {
+        for grapheme in sanitized.graphemes(true) {
             if grapheme == "\n" {
                 y = y.saturating_add(1);
                 x = origin.x();
@@ -163,6 +166,59 @@ impl Frame {
     }
 }
 
+fn sanitize_terminal_text(text: &str) -> String {
+    let mut sanitized = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '\u{1b}' => match characters.peek().copied() {
+                Some('[') => {
+                    characters.next();
+                    consume_csi(&mut characters);
+                }
+                Some(']') => {
+                    characters.next();
+                    consume_osc(&mut characters);
+                }
+                _ => {}
+            },
+            '\u{9b}' => consume_csi(&mut characters),
+            '\u{9d}' => consume_osc(&mut characters),
+            '\n' => sanitized.push('\n'),
+            '\t' => sanitized.push(' '),
+            '\u{0}'..='\u{8}' | '\u{b}'..='\u{1f}' | '\u{7f}'..='\u{9f}' => {}
+            _ => sanitized.push(character),
+        }
+    }
+    sanitized
+}
+
+fn consume_csi<I>(characters: &mut std::iter::Peekable<I>)
+where
+    I: Iterator<Item = char>,
+{
+    for character in characters {
+        if ('@'..='~').contains(&character) {
+            break;
+        }
+    }
+}
+
+fn consume_osc<I>(characters: &mut std::iter::Peekable<I>)
+where
+    I: Iterator<Item = char>,
+{
+    while let Some(character) = characters.next() {
+        if character == '\u{7}' {
+            break;
+        }
+        if character == '\u{1b}' && characters.peek().copied() == Some('\\') {
+            characters.next();
+            break;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +240,22 @@ mod tests {
         assert_eq!(frame.get(Point::new(0, 1)).expect("cell").symbol(), 'd');
         assert_eq!(frame.get(Point::new(0, 2)).expect("cell").symbol(), 'e');
         assert_eq!(frame.get(Point::new(1, 2)).expect("cell").symbol(), 'f');
+    }
+
+    #[test]
+    fn removes_terminal_control_bytes_from_text() {
+        let mut frame = Frame::new(Size::new(8, 1));
+        frame.write_text(Point::new(0, 0), "safe\x1b[31mtext", Style::default());
+        let value = (0..8).filter_map(|x| frame.grapheme(Point::new(x, 0))).collect::<String>();
+        assert_eq!(value, "safetext");
+        assert!(!value.contains('\x1b'));
+    }
+
+    #[test]
+    fn removes_osc_sequences_without_dropping_following_text() {
+        let mut frame = Frame::new(Size::new(6, 1));
+        frame.write_text(Point::new(0, 0), "a\x1b]0;title\x07bc", Style::default());
+        let value = (0..6).filter_map(|x| frame.grapheme(Point::new(x, 0))).collect::<String>();
+        assert_eq!(value, "abc");
     }
 }

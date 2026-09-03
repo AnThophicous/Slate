@@ -11,6 +11,7 @@ import {
   createInputRouter,
   createNormalizedInput,
   createTerminalController,
+  createSlateOutput,
   createSlateHooks,
   createSlateRoot,
   createSlateStore,
@@ -24,10 +25,13 @@ import {
   Glow,
   Select,
   List,
+  Image,
   LogView,
   Text,
   signal,
   renderTreeToAnsi,
+  createMediaSource,
+  renderMedia,
   adaptLegacyRenderer,
   createReactTerminalRoot,
   sameEvent,
@@ -174,6 +178,14 @@ test("runtime renderiza UTF-8 e cores hex customizadas", () => {
   const output = renderTreeToAnsi(tree, layout, { width: 12, height: 2 }, { clear: false, hideCursor: false });
   assert.match(output, /Olá 世界/);
   assert.match(output, /38;2;0;255;0m/);
+});
+
+test("renderer ancora cada linha na coluna zero", () => {
+  const tree = resolveTree(Container({ id: "app", width: 6, height: 2, children: Text({ id: "text", text: "ab\ncd" }) }));
+  const layout = createFlexLayoutEngine().layout(tree, { width: 6, height: 2 });
+  const output = renderTreeToAnsi(tree, layout, { width: 6, height: 2 }, { clear: false, hideCursor: true });
+  assert.match(output, /\u001b\[2;1H/);
+  assert.doesNotMatch(output, /ab\ncd/);
 });
 
 test("efeitos declarativos interpolam cada glifo sem alterar o texto", () => {
@@ -457,4 +469,91 @@ test("React reconciler monta uma árvore sem produzir root vazio", async () => {
   assert.match(writes.at(-1), /React/);
   controller.close();
   root.close();
+});
+
+test("captura ponteiro durante drag e libera no release", () => {
+  const events = [];
+  const app = createSlateApp(Container({ id: "root", width: 8, height: 2, children: Button({
+    id: "drag", width: 8, capturePointer: true,
+    onMouse: event => { events.push([event.action, event.target]); }
+  }) }), { viewport: { width: 8, height: 2 } });
+  app.dispatch({ kind: "mouse", action: "press", button: "left", x: 2, y: 0 });
+  app.dispatch({ kind: "mouse", action: "drag", button: "left", x: 20, y: 0 });
+  app.dispatch({ kind: "mouse", action: "release", button: "left", x: 20, y: 0 });
+  app.dispatch({ kind: "mouse", action: "drag", button: "left", x: 20, y: 0 });
+  assert.deepEqual(events, [["press", "drag"], ["drag", "drag"], ["release", "drag"]]);
+});
+
+test("router captura falha de input, libera a fonte e desmonta o app", () => {
+  const app = createSlateApp(Text({ id: "text", text: "Slate" }), { viewport: { width: 8, height: 1 } });
+  let released = 0;
+  let failure;
+  const router = createInputRouter(app, {
+    poll: () => { throw new Error("input quebrado"); },
+    close: () => { released += 1; }
+  }, 0, undefined, error => { failure = error; });
+  router.start();
+  assert.equal(router.running(), false);
+  assert.equal(released, 1);
+  assert.equal(app.getTree(), null);
+  assert.equal(router.error(), failure);
+  assert.match(failure.message, /input quebrado/);
+});
+
+test("controller fecha o terminal quando a saída falha", () => {
+  const app = createSlateApp(Text({ id: "text", text: "Slate" }), { viewport: { width: 8, height: 1 } });
+  let released = 0;
+  const controller = createTerminalController(app, {
+    poll: () => null,
+    close: () => { released += 1; }
+  }, { write: () => { throw new Error("stdout quebrado"); } });
+  controller.start();
+  assert.equal(controller.running(), false);
+  assert.match(controller.error().message, /stdout quebrado/);
+  assert.equal(released, 1);
+  assert.equal(app.getTree(), null);
+});
+
+test("limita feedback loop de renderização sem deixar o app preso", () => {
+  const value = signal(0);
+  const app = createSlateApp(() => Text({ id: "text", text: String(value.get()) }), { maxRenderPasses: 3, viewport: { width: 8, height: 1 } });
+  const unsubscribe = app.subscribe(() => { value.set(value.peek() + 1); });
+  value.set(1);
+  assert.throws(() => app.flush(), /loop de renderização/);
+  unsubscribe();
+  assert.equal(app.flush().length >= 0, true);
+});
+
+test("renderer remove controles ANSI de texto e desenha bordas reais", () => {
+  const tree = resolveTree(Container({ id: "panel", width: 8, height: 3, border: { style: "rounded", color: "#00ffcc" }, children: Text({ id: "text", text: "ok\u001b[31m" }) }));
+  const layout = createFlexLayoutEngine().layout(tree, { width: 8, height: 3 });
+  const output = renderTreeToAnsi(tree, layout, { width: 8, height: 3 }, { clear: false, hideCursor: true });
+  assert.match(output, /╭/);
+  assert.doesNotMatch(output, /\u001b\[31m/);
+});
+
+test("media usa protocolo explícito e mantém fallback seguro", () => {
+  const source = createMediaSource(Buffer.from("png-placeholder"), "image/png", "cover.png");
+  const inline = renderMedia(source, { x: 1, y: 2, width: 4, height: 3, protocol: "iterm2" });
+  assert.match(inline, /1337;File=inline=1/);
+  assert.match(inline, /cG5nLXBsYWNlaG9sZGVy/);
+  assert.equal(renderMedia(source, { x: 0, y: 0, width: 2, height: 2, protocol: "none" }), "");
+  const tree = resolveTree(Image({ id: "image", width: 4, height: 3, source }));
+  const layout = createFlexLayoutEngine().layout(tree, { width: 4, height: 3 });
+  assert.match(renderTreeToAnsi(tree, layout, { width: 4, height: 3 }, { clear: false, hideCursor: true, mediaProtocol: "iterm2" }), /1337;File=inline=1/);
+  const bareBase64 = resolveTree(Image({ id: "bare", width: 2, height: 2, source: "cG5nLXBsYWNlaG9sZGVy", mimeType: "image/png" }));
+  const bareLayout = createFlexLayoutEngine().layout(bareBase64, { width: 2, height: 2 });
+  assert.match(renderTreeToAnsi(bareBase64, bareLayout, { width: 2, height: 2 }, { clear: false, hideCursor: true, mediaProtocol: "iterm2" }), /1337;File=inline=1/);
+});
+
+test("frame dedupe permite retry depois de uma falha de escrita", () => {
+  let attempts = 0;
+  const output = createSlateOutput({ write: () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("falha transitória");
+    return true;
+  } });
+  assert.throws(() => output.write("frame"), /falha transitória/);
+  assert.equal(output.write("frame"), true);
+  assert.equal(attempts, 2);
 });
