@@ -27,7 +27,7 @@
     "native:build": "npm run build --workspace @slate-terminal/native"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.4.0",
     "typescript": "^5.8.0",
     "@napi-rs/cli": "^3.8.6"
   }
