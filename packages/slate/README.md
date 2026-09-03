@@ -1,6 +1,6 @@
 # @slate-terminal/core
 
-Facade TypeScript estável da Slate 2.2.0. O pacote fornece renderização ANSI com fallback, binding nativo opcional, eventos unificados, nós imperativos, widgets, sinais básicos e controles de terminal.
+Facade TypeScript estável da Slate 2.2.2. O pacote fornece renderização ANSI com fallback, binding nativo opcional, eventos unificados, nós imperativos, widgets, sinais básicos e controles de terminal.
 
 ```ts
 import { Button, Container, createApp, renderText } from "@slate-terminal/core";

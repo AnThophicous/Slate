@@ -255,7 +255,7 @@ mod tests {
     fn removes_osc_sequences_without_dropping_following_text() {
         let mut frame = Frame::new(Size::new(6, 1));
         frame.write_text(Point::new(0, 0), "a\x1b]0;title\x07bc", Style::default());
-        let value = (0..6).filter_map(|x| frame.grapheme(Point::new(x, 0))).collect::<String>();
+        let value = (0..3).filter_map(|x| frame.grapheme(Point::new(x, 0))).collect::<String>();
         assert_eq!(value, "abc");
     }
 }

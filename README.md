@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/AnThophicous/Slate/actions/workflows/ci.yml/badge.svg)](https://github.com/AnThophicous/Slate/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/) [![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
 
-Slate 2.2.0 é um toolkit de interfaces interativas para terminal escrito em Rust, com runtime nativo para Node.js e uma API TypeScript/TSX que funciona sem React. Teclado, mouse, paste, resize e foco usam o mesmo contrato de eventos.
+Slate 2.2.2 é um toolkit de interfaces interativas para terminal escrito em Rust, com runtime nativo para Node.js e uma API TypeScript/TSX que funciona sem React. Teclado, mouse, paste, resize e foco usam o mesmo contrato de eventos.
 
 O modelo visual principal chama-se Slate Mosaic: uma árvore de containers e elementos com IDs estáveis, layout Flexbox, reconciliação incremental e atualização reativa. O Mosaic permite construir a interface por blocos, editar qualquer elemento e manter um único ciclo de renderização.
 

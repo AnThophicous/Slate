@@ -1,4 +1,4 @@
-export const VERSION = "2.2.0" as const;
+export const VERSION = "2.2.2" as const;
 
 export * from "./types.js";
 export * from "./vnode.js";

@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-export const VERSION = "2.2.0" as const;
+export const VERSION = "2.2.2" as const;
 
 export type ElementId = string | number;
 export type Color = "default" | `#${string}`;

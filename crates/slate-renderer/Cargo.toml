@@ -9,5 +9,5 @@ authors.workspace = true
 readme = "../../README.md"
 
 [dependencies]
-slate-core = { path = "../slate-core", version = "2.2.0" }
+slate-core = { path = "../slate-core", version = "2.2.2" }
 unicode-width.workspace = true

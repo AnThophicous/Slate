@@ -1,6 +1,6 @@
 {
   "name": "@slate-terminal/react",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Production-grade terminal UI runtime with native TSX and optional React integration.",
   "keywords": [
     "terminal-ui",
@@ -55,7 +55,7 @@
   ],
   "sideEffects": false,
   "dependencies": {
-    "@slate-terminal/core": "2.2.1"
+    "@slate-terminal/core": "2.2.2"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

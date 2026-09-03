@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-09-03
+
+### Fixed
+
+- Corrigida a asserção do teste Rust de sanitização OSC para verificar apenas
+  o texto escrito, sem confundir células de preenchimento do frame com saída.
+
 ## [2.2.1] - 2026-09-03
 
 This patch release ships the interactive terminal and media hardening merged

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { VERSION, Button, Container, Input, computed, createApp, createInkAdapter, createLegacyRendererAdapter, effect, hex, renderText, signal } from "../dist/index.js";
 
 test("expõe a versão LTS e renderiza texto", () => {
-  assert.equal(VERSION, "2.2.0");
+  assert.equal(VERSION, "2.2.2");
   assert.match(renderText("Slate"), /Slate/);
 });
 
