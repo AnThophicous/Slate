@@ -32,6 +32,23 @@ com IDs estáveis, layout Flexbox, reconciliação incremental e atualização
 reativa. A interface é construída por blocos, qualquer elemento pode ser editado
 isoladamente e existe um único ciclo de renderização.
 
+### Objetivos de engenharia
+
+Estes são os alvos que guiam a evolução do projeto. Cada um é uma decisão de
+engenharia com critério de aceitação, não um slogan.
+
+| Objetivo | O que significa na prática |
+| --- | --- |
+| **Performance alta** | Custo por frame proporcional ao que mudou, não ao tamanho da árvore. Reconciliação indexada por ID, diff estrutural de props, delta rendering por célula e mudanças só de cor que não recalculam layout. Medido por benchmark, não por impressão. |
+| **Compatibilidade entre sistemas operacionais** | O mesmo código roda em Linux, macOS e Windows. Diferenças de terminal ficam contidas na camada de entrada e no renderer; a aplicação vê um contrato único de eventos, cores e medidas. Windows é alvo de primeira classe, incluindo CMD e PowerShell. |
+| **Renderização visual com cache** | O frame é o resultado de um pipeline visual com cache de medição, layout e saída ANSI. O cache tem um diretório próprio e limite explícito: nada de espalhar pastas novas na Temp a cada execução. |
+| **Cache pré-aquecido** | O que é conhecido antes do primeiro frame (métricas de fonte, larguras de grapheme, layout inicial, sequências ANSI recorrentes) é preparado antes de a interface subir, para reduzir o custo do primeiro render. |
+| **Componentes próprios completos e customizáveis** | A biblioteca de componentes é do Slate, não um wrapper. Cada componente expõe estilo, comportamento e slots suficientes para ser reaproveitado sem fork. |
+| **APIs de baixo nível completas** | Acesso direto ao terminal para quem precisa de controle total: modos, cursor, buffers, escrita ANSI crua, entrada bruta e ciclo de vida da sessão, sem passar pela árvore de componentes. |
+
+O estado atual e o que ainda está planejado estão no
+[roadmap da 2.3.0](#roadmap--230-coming-up-new-libraries-and-extensions-for-react).
+
 ## Arquitetura
 
 | Camada | Pacote / crate | Responsabilidade |
@@ -177,12 +194,18 @@ Slate desmonta a árvore React e executa os cleanups dos componentes.
 
 ## Roadmap — 2.3.0: Coming Up: New Libraries and Extensions for React
 
-A 2.3.0 ainda não foi lançada. O objetivo declarado da versão é **aceitar o
-ecossistema React por completo**: além de renderizar componentes React, o Slate
-passa a aceitar bibliotecas React expansíveis rodando sobre o runtime de
-terminal.
+A 2.3.0 ainda não foi lançada. O anúncio da versão é **aceitar o ecossistema
+React por completo**: além de renderizar componentes React, o Slate passa a
+aceitar bibliotecas React expansíveis rodando sobre o runtime de terminal. Em
+volta desse anúncio, a versão executa os
+[objetivos de engenharia](#objetivos-de-engenharia) do projeto: performance,
+compatibilidade entre sistemas operacionais, cache disciplinado e pré-aquecido,
+componentes próprios mais completos e APIs de baixo nível para controle total
+do console.
 
-Escopo planejado:
+A versão tem seis frentes, uma por objetivo de engenharia.
+
+### 1. Ecossistema React
 
 - **Bibliotecas React de terceiros no terminal.** Componentes de bibliotecas
   React que não dependam de DOM devem funcionar sobre o reconciliador do Slate,
@@ -195,9 +218,59 @@ Escopo planejado:
 - **Contrato de compatibilidade explícito.** O que uma biblioteca React precisa
   cumprir para ser suportada, mais uma suíte de conformidade que verifica isso.
 
+### 2. Performance
+
+- Custo por frame proporcional ao subconjunto alterado, com o caminho quente de
+  medição e diff em Rust.
+- Orçamento de frame declarado e verificado por benchmark de regressão no CI,
+  em vez de medição pontual.
+- Alocação estável no ciclo de render: buffers reaproveitados entre frames,
+  sem realocar a árvore inteira a cada commit.
+
+### 3. Compatibilidade entre sistemas operacionais
+
+- Matriz de terminais suportados por sistema operacional, com o comportamento
+  esperado documentado por capacidade (cor, mouse, paste, imagem, resize).
+- Detecção de capacidade em tempo de execução, com degradação previsível
+  quando o terminal não oferece o recurso.
+- Windows tratado como alvo de primeira classe: CMD, PowerShell e Windows
+  Terminal cobertos por teste, não por suposição.
+
+### 4. Renderização visual com cache disciplinado
+
+- Pipeline visual com cache de medição de texto, layout resolvido e segmentos
+  ANSI recorrentes.
+- **Um diretório de cache, não uma pasta nova por execução.** Raiz única e
+  estável por versão, respeitando a convenção do sistema operacional, com
+  limite de tamanho, expiração e limpeza. Arquivos temporários da sessão são
+  removidos no encerramento, inclusive em falha.
+- Chave de cache derivada do conteúdo, para que duas execuções iguais
+  reaproveitem o trabalho em vez de recriá-lo.
+
+### 5. Cache pré-aquecido
+
+- Pré-aquecimento do que é conhecido antes do primeiro frame: larguras de
+  grapheme, métricas de fonte, layout inicial e sequências ANSI de uso
+  frequente.
+- Aquecimento fora do caminho crítico e cancelável, para nunca atrasar o
+  primeiro render que deveria acelerar.
+- Alvo verificável: custo do primeiro frame comparável ao dos frames
+  seguintes, medido pelo mesmo benchmark.
+
+### 6. Componentes próprios e APIs de baixo nível
+
+- Biblioteca de componentes mais completa e customizável, com estilo,
+  comportamento e slots expostos, para reaproveitamento sem fork.
+- Camada de baixo nível pública para controle total do console: modos de
+  terminal, cursor, buffers alternativos, escrita ANSI crua, entrada bruta e
+  ciclo de vida da sessão, utilizável sem a árvore de componentes.
+- No Windows, essa camada assume o console real (incluindo o CMD), em vez de
+  supor um terminal compatível com ANSI.
+
 A 2.3.0 segue a política aditiva da linha 2.x: nada do que existe hoje é
-removido nem muda de significado. O status de cada item fica em
-[CHANGELOG.md](CHANGELOG.md) até o lançamento.
+removido nem muda de significado. Cada frente entra por tipos, funções e
+métodos novos. O status de cada item fica em [CHANGELOG.md](CHANGELOG.md) até o
+lançamento.
 
 ## Rust
 
