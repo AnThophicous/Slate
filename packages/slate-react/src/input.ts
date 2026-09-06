@@ -27,7 +27,12 @@ const semanticFields = [
 ] as const;
 
 export interface NormalizedInputOptions {
-  /** Set to false when a source intentionally emits adjacent identical events. */
+  /**
+   * Opt-in semantic deduplication for sources that are known to deliver the
+   * same event twice. It is off by default: two adjacent identical events are
+   * normally two real deliveries (key repeat, fast typing, wheel scroll), and
+   * content equality cannot tell a duplicate delivery from a legitimate one.
+   */
   readonly deduplicate?: boolean;
 }
 
@@ -72,21 +77,21 @@ export function isEmergencyExit(event: SlateEvent): boolean {
 
 /** Adapts any input source to Slate's canonical event contract. */
 export function createNormalizedInput(source: SlateInputSource, options: NormalizedInputOptions = {}): SlateInputSource {
-  let lastObject: SlateEvent | null = null;
+  const deduplicate = options.deduplicate === true;
   let lastKey: string | undefined;
   return {
+    size: source.size,
     close: source.close,
     poll(timeoutMs) {
       const event = source.poll(timeoutMs);
       if (!event) {
-        lastObject = null;
         lastKey = undefined;
         return null;
       }
       const normalized = normalizeEvent(event);
+      if (!deduplicate) return normalized;
       const key = semanticEventKey(normalized);
-      if (event === lastObject || (options.deduplicate !== false && key === lastKey)) return null;
-      lastObject = event;
+      if (key === lastKey) return null;
       lastKey = key;
       return normalized;
     }

@@ -10,9 +10,32 @@
 - Bordas reais (`single`, `double`, `rounded`, `heavy`) no renderer TSX.
 - Âncora absoluta das linhas ANSI para impedir deslocamento horizontal entre terminais.
 
+### Changed
+
+- `createNormalizedInput` não deduplica mais por padrão: dois eventos consecutivos iguais são duas entregas reais. Use `{ deduplicate: true }` apenas em fontes que comprovadamente repetem a entrega.
+- `NodeProps` perdeu o índice `[property: string]: unknown`, então props inválidas (`width: "banana"`, `disabled: "yes"`) passam a ser erro de tipo em todos os widgets.
+- `computed()` devolve `dispose()` e é liberado junto com o efeito ou o render que o criou.
+- Peers de React apertados para as linhas realmente suportadas: `react: "^18.3.0 || ^19.0.0"` e `react-reconciler: "^0.29.2 || ^0.31.0"`.
+- `createReactTerminalRoot` recusa pares cruzados (React 18 + 0.31, React 19 + 0.29) que o range do npm não consegue excluir; `checkReactCompatibility()` expõe a mesma decisão sem criar um root.
+- `TextField` mantém o `id` no `Input` e deriva `<id>:field` para o container; `Grid` só nomeia células quando o próprio grid tem `id`.
+
 ### Fixed
 
 - Falhas de input, render e output agora fecham polling, desmontam o app e tentam restaurar o terminal; `onError` e `error()` expõem o diagnóstico.
+- O reconciliador React separa props de filhos, remove props que sumiram do render, atualiza texto e trata reordenação como movimento em vez de duplicar nós.
+- `createContainer` recebe os três callbacks de erro do react-reconciler 0.31 e a assinatura de 8 argumentos da linha 0.29; Error Boundaries renderizam o fallback sem derrubar o processo, e React 18 volta a aplicar updates. O teste (`npm run test:react18`) roda contra o workspace privado `tests/react18`, com react 18.3.1 e react-reconciler 0.29.2 travados no lockfile da raiz — sem instalação dinâmica nem rede.
+- Fechar o app Slate (controller, Ctrl+C ou falha de input) desmonta a árvore React e roda os cleanups dos componentes.
+- Erros de render agendado são encaminhados por `subscribeError`/`reportError` em vez de escaparem de um microtask ou timer.
+- Widgets não controlados guardam um slot por propriedade: digitação contínua, `cursor` e `value` deixam de se sobrescrever, e o valor interno não passa mais a ser lido como controlado.
+- `Select`, `Tabs` e `List` deixam de limitar o índice atual a zero antes de navegar.
+- `onEvent` que devolve `"ignored"` volta a deixar o evento seguir para o handler específico e para o comportamento padrão do widget.
+- `Tab` e `focus()`/`blur()` emitem frame; o controller religa a animação quando um `Spinner` parado é ligado.
+- O layout mede `List`, `Table`, `Modal` e demais widgets pelo texto que o renderer desenha, em vez de tratá-los como uma linha vazia.
+- Reconciliação por índice de key/ID e comparação estrutural de props: 4.000 filhos sem mudança saem de ~193 ms com updates falsos para ~13 ms sem operações, e uma mudança só de cor não recalcula layout.
+- O adaptador Yoga chama os setters no nó (o receptor era perdido) e libera a subárvore inteira, inclusive quando a medição falha.
+- `@slate-terminal/core` e `@slate-terminal/react` compartilham um único contexto reativo: um signal de core lido em uma composição de react atualiza a tela.
+- Renderer Rust: o delta compara o grapheme completo, então trocar `a`+U+0301 por `a`+U+0300 repinta a célula.
+- `npm run benchmark` mede Ink de verdade quando `SLATE_BENCHMARK_INK`/`SLATE_BENCHMARK_REACT` apontam para uma instalação, em vez de apenas checar disponibilidade.
 - Feedback loops de renderização têm limite determinístico (`maxRenderPasses`) em vez de travar o processo.
 - Texto externo não consegue injetar sequências de controle ANSI no renderer TypeScript ou Rust.
 - Botões e checkboxes não tratam clique direito como ativação.

@@ -1,5 +1,6 @@
 import { isSignal, readReactive } from "./reactive.js";
 import { displayWidth, splitLines, wrappedLineCount } from "./text.js";
+import { widgetText } from "./widgets.js";
 import type { ComponentTreeNode, ElementId, FlexDimension, FlexStyle, HostType, Overflow } from "./types.js";
 
 export interface Viewport {
@@ -64,6 +65,7 @@ export interface YogaNodeLike {
   setGapPercent?(gutter: unknown, value: number): void;
   setDisplay?(value: unknown): void;
   insertChild(child: YogaNodeLike, index: number): void;
+  removeChild?(child: YogaNodeLike): void;
   calculateLayout(width?: number, height?: number, direction?: unknown): void;
   getComputedLeft(): number;
   getComputedTop(): number;
@@ -72,6 +74,7 @@ export interface YogaNodeLike {
   getChildCount(): number;
   getChild(index: number): YogaNodeLike;
   free?(): void;
+  freeRecursive?(): void;
 }
 
 export interface YogaRuntime {
@@ -124,13 +127,27 @@ export function createYogaLayoutEngine(runtime: YogaRuntime, options: YogaAdapte
   const constants = options.constants ?? inferYogaConstants(runtime);
   return {
     layout: (tree, viewport) => {
-      const root = createYogaNode(tree, runtime, constants);
-      root.node.calculateLayout(viewport.width, viewport.height, options.direction ?? constants.leftToRight);
-      const result = collectYogaLayout(root.node, tree, null);
-      root.node.free?.();
-      return result;
+      // Every node created here holds native memory. The whole subtree is
+      // released, not only the root, and it is released even when a
+      // measurement throws.
+      const created: YogaNodeLike[] = [];
+      const root = createYogaNode(tree, runtime, constants, created);
+      try {
+        root.calculateLayout(viewport.width, viewport.height, options.direction ?? constants.leftToRight);
+        return collectYogaLayout(root, tree, null);
+      } finally {
+        freeYogaNodes(root, created);
+      }
     }
   };
+}
+
+function freeYogaNodes(root: YogaNodeLike, created: readonly YogaNodeLike[]): void {
+  if (typeof root.freeRecursive === "function") {
+    root.freeRecursive();
+    return;
+  }
+  for (let index = created.length - 1; index >= 0; index -= 1) created[index]?.free?.();
 }
 
 function layoutNode(node: ComponentTreeNode, frame: LayoutRect, isRoot: boolean, parentClip: LayoutRect | null): LayoutTreeNode {
@@ -532,7 +549,14 @@ function textWidthConstraint(node: ComponentTreeNode, availableWidth: number): n
   return availableWidth;
 }
 
+/**
+ * Measurement uses the same text the renderer draws. A list, a table or a
+ * modal occupies as many lines as it prints, instead of being measured as a
+ * single empty line and overlapped by the next component.
+ */
 function readText(node: ComponentTreeNode): string {
+  const lines = widgetText(node);
+  if (lines.length > 0) return lines.join("\n");
   const value = node.type === "button" ? node.props.label ?? node.props.text : node.props.text ?? node.props.label ?? node.props.placeholder;
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -544,40 +568,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function createYogaNode(tree: ComponentTreeNode, runtime: YogaRuntime, constants: YogaConstants): { node: YogaNodeLike } {
+function createYogaNode(tree: ComponentTreeNode, runtime: YogaRuntime, constants: YogaConstants, created: YogaNodeLike[]): YogaNodeLike {
   const node = runtime.Node.create();
+  created.push(node);
   applyYogaStyle(node, tree, constants);
-  tree.children.forEach((child, index) => node.insertChild(createYogaNode(child, runtime, constants).node, index));
-  return { node };
+  tree.children.forEach((child, index) => node.insertChild(createYogaNode(child, runtime, constants, created), index));
+  return node;
 }
 
 function applyYogaStyle(node: YogaNodeLike, tree: ComponentTreeNode, constants: YogaConstants): void {
   const style = readStyle(tree);
-  applyDimension(node.setWidth, node.setWidthPercent, style.width ?? tree.props.width);
-  applyDimension(node.setHeight, node.setHeightPercent, style.height ?? tree.props.height);
-  applyConstraint(node.setMinWidth, node.setMinWidthPercent, style.minWidth ?? tree.props.minWidth);
-  applyConstraint(node.setMaxWidth, node.setMaxWidthPercent, style.maxWidth ?? tree.props.maxWidth);
-  applyConstraint(node.setMinHeight, node.setMinHeightPercent, style.minHeight ?? tree.props.minHeight);
-  applyConstraint(node.setMaxHeight, node.setMaxHeightPercent, style.maxHeight ?? tree.props.maxHeight);
-  node.setFlexDirection(style.flexDirection === "row" ? constants.row ?? "row" : constants.column ?? "column");
-  if (node.setFlexWrap) node.setFlexWrap(style.flexWrap === "wrap" ? constants.wrap ?? "wrap" : constants.nowrap ?? "nowrap");
-  node.setFlexGrow(positive(style.flexGrow));
-  node.setFlexShrink(style.flexShrink === undefined ? 1 : positive(style.flexShrink));
+  applyDimension(node, "setWidth", "setWidthPercent", style.width ?? tree.props.width);
+  applyDimension(node, "setHeight", "setHeightPercent", style.height ?? tree.props.height);
+  applyDimension(node, "setMinWidth", "setMinWidthPercent", style.minWidth ?? tree.props.minWidth);
+  applyDimension(node, "setMaxWidth", "setMaxWidthPercent", style.maxWidth ?? tree.props.maxWidth);
+  applyDimension(node, "setMinHeight", "setMinHeightPercent", style.minHeight ?? tree.props.minHeight);
+  applyDimension(node, "setMaxHeight", "setMaxHeightPercent", style.maxHeight ?? tree.props.maxHeight);
+  callSetter(node, "setFlexDirection", style.flexDirection === "row" ? constants.row ?? "row" : constants.column ?? "column");
+  callSetter(node, "setFlexWrap", style.flexWrap === "wrap" ? constants.wrap ?? "wrap" : constants.nowrap ?? "nowrap");
+  callSetter(node, "setFlexGrow", positive(style.flexGrow));
+  callSetter(node, "setFlexShrink", style.flexShrink === undefined ? 1 : positive(style.flexShrink));
   applyBasis(node, style.flexBasis);
-  node.setJustifyContent(justifyConstant(style.justifyContent, constants));
-  node.setAlignItems(alignConstant(style.alignItems, constants));
-  if (style.alignSelf !== undefined) node.setAlignSelf(alignConstant(style.alignSelf, constants));
-  if (node.setAlignContent) node.setAlignContent(alignConstant(style.alignContent, constants));
+  callSetter(node, "setJustifyContent", justifyConstant(style.justifyContent, constants));
+  callSetter(node, "setAlignItems", alignConstant(style.alignItems, constants));
+  if (style.alignSelf !== undefined) callSetter(node, "setAlignSelf", alignConstant(style.alignSelf, constants));
+  callSetter(node, "setAlignContent", alignConstant(style.alignContent, constants));
   const padding = readEdges(style, "padding", 100, 100);
   const margin = readEdges(style, "margin", 100, 100);
-  applyEdges(node.setPadding, node.setPaddingPercent, padding, constants);
-  applyEdges(node.setMargin, node.setMarginPercent, margin, constants);
-  if (node.setGap) {
-    applyGap(node, node.setGap, node.setGapPercent, constants.gutterAll, style.gap);
-    applyGap(node, node.setGap, node.setGapPercent, constants.gutterRow, style.rowGap);
-    applyGap(node, node.setGap, node.setGapPercent, constants.gutterColumn, style.columnGap);
-  }
-  if (style.display === "none" && node.setDisplay && constants.displayNone !== undefined) node.setDisplay(constants.displayNone);
+  applyEdges(node, "setPadding", "setPaddingPercent", padding, constants);
+  applyEdges(node, "setMargin", "setMarginPercent", margin, constants);
+  applyGap(node, constants.gutterAll, style.gap);
+  applyGap(node, constants.gutterRow, style.rowGap);
+  applyGap(node, constants.gutterColumn, style.columnGap);
+  if (style.display === "none" && constants.displayNone !== undefined) callSetter(node, "setDisplay", constants.displayNone);
 }
 
 function collectYogaLayout(node: YogaNodeLike, tree: ComponentTreeNode, parentClip: LayoutRect | null): LayoutTreeNode {
@@ -595,35 +618,41 @@ function collectYogaLayout(node: YogaNodeLike, tree: ComponentTreeNode, parentCl
   return { id: tree.id, type: tree.type, layout, content, children, scrollWidth: layout.width, scrollHeight: layout.height, scrollLeft: 0, scrollTop: 0, overflowX, overflowY, clip: clipFor(overflowX, overflowY, layout, parentClip) };
 }
 
-function applyDimension(setter: ((value: number) => void) | undefined, percentSetter: ((value: number) => void) | undefined, value: unknown): void {
-  if (typeof value === "number" && Number.isFinite(value)) setter?.(Math.max(0, value));
-  else if (typeof value === "string" && value.endsWith("%")) percentSetter?.(positive(Number(value.slice(0, -1))));
+/**
+ * Yoga setters are prototype methods. Calling one detached from its node loses
+ * the receiver, so the value never reaches the native layout object.
+ */
+function callSetter(node: YogaNodeLike, name: keyof YogaNodeLike, ...args: unknown[]): boolean {
+  const setter = node[name];
+  if (typeof setter !== "function") return false;
+  (setter as (...values: unknown[]) => void).apply(node, args);
+  return true;
 }
 
-function applyConstraint(setter: ((value: number) => void) | undefined, percentSetter: ((value: number) => void) | undefined, value: unknown): void {
-  applyDimension(setter, percentSetter, value);
+function applyDimension(node: YogaNodeLike, setter: keyof YogaNodeLike, percentSetter: keyof YogaNodeLike, value: unknown): void {
+  if (typeof value === "number" && Number.isFinite(value)) callSetter(node, setter, Math.max(0, value));
+  else if (typeof value === "string" && value.endsWith("%")) callSetter(node, percentSetter, positive(Number(value.slice(0, -1))));
 }
 
 function applyBasis(node: YogaNodeLike, value: FlexDimension | undefined): void {
-  if (typeof value === "number") node.setFlexBasis?.(Math.max(0, value));
-  else if (typeof value === "string" && value.endsWith("%")) node.setFlexBasisPercent?.(positive(Number(value.slice(0, -1))));
+  if (typeof value === "number") callSetter(node, "setFlexBasis", Math.max(0, value));
+  else if (typeof value === "string" && value.endsWith("%")) callSetter(node, "setFlexBasisPercent", positive(Number(value.slice(0, -1))));
 }
 
-function applyEdges(setter: ((edge: unknown, value: number) => void) | undefined, percentSetter: ((edge: unknown, value: number) => void) | undefined, edges: Edges, constants: YogaConstants): void {
+function applyEdges(node: YogaNodeLike, setter: keyof YogaNodeLike, percentSetter: keyof YogaNodeLike, edges: Edges, constants: YogaConstants): void {
   const sides = [[constants.top, edges.top], [constants.right, edges.right], [constants.bottom, edges.bottom], [constants.left, edges.left]] as const;
   if (sides.every(([side]) => side !== undefined)) {
-    for (const [side, value] of sides) setter?.(side, value);
+    for (const [side, value] of sides) callSetter(node, setter, side, value);
     return;
   }
-  if (constants.all !== undefined && edges.top === edges.right && edges.right === edges.bottom && edges.bottom === edges.left) setter?.(constants.all, edges.top);
+  if (constants.all !== undefined && edges.top === edges.right && edges.right === edges.bottom && edges.bottom === edges.left) callSetter(node, setter, constants.all, edges.top);
   void percentSetter;
 }
 
-function applyGap(node: YogaNodeLike, setter: (gutter: unknown, value: number) => void, percentSetter: ((gutter: unknown, value: number) => void) | undefined, gutter: unknown, value: FlexDimension | undefined): void {
-  if (gutter === undefined || value === undefined) return;
-  if (typeof value === "number") setter(gutter, positive(value));
-  else if (value.endsWith("%")) percentSetter?.(gutter, positive(Number(value.slice(0, -1))));
-  void node;
+function applyGap(node: YogaNodeLike, gutter: unknown, value: FlexDimension | undefined): void {
+  if (gutter === undefined || value === undefined || value === "auto") return;
+  if (typeof value === "number") callSetter(node, "setGap", gutter, positive(value));
+  else if (value.endsWith("%")) callSetter(node, "setGapPercent", gutter, positive(Number(value.slice(0, -1))));
 }
 
 function inferYogaConstants(runtime: YogaRuntime): YogaConstants {

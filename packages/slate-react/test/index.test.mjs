@@ -25,15 +25,21 @@ import {
   Glow,
   Select,
   List,
+  Tabs,
+  Spinner,
+  Grid,
+  TextField,
   Image,
   LogView,
   Text,
+  createYogaLayoutEngine,
   signal,
   renderTreeToAnsi,
   createMediaSource,
   renderMedia,
   adaptLegacyRenderer,
   createReactTerminalRoot,
+  checkReactCompatibility,
   sameEvent,
   semanticEventKey,
   isEmergencyExit,
@@ -345,20 +351,36 @@ test("widgets suportam estado interno quando props não são controladas", async
   assert.equal(tree?.children.find(child => child.id === "list")?.props.activeIndex, 1);
 });
 
-test("normaliza mouse de fontes Windows e deduplica eventos semanticamente", () => {
+test("normaliza mouse de fontes Windows e preserva entregas repetidas", () => {
   const first = { kind: "mouse", action: "Moved", button: "Left", x: 4, y: 2 };
-  const source = {
+  const makeSource = () => ({
     events: [first, { ...first }, null],
     poll() { return this.events.shift() ?? null; }
-  };
-  const input = createNormalizedInput(source);
+  });
+  const input = createNormalizedInput(makeSource());
   const normalized = input.poll();
   assert.equal(normalized?.action, "move");
   assert.equal(normalized?.button, "left");
-  assert.equal(input.poll(), null);
+  assert.equal(input.poll()?.action, "move");
   assert.equal(sameEvent(first, { ...first, action: "move", button: "left" }), true);
   assert.equal(sameEvent(normalized, { ...normalized, id: "different" }), true);
   assert.equal(semanticEventKey(normalized).includes("different"), false);
+  const deduplicated = createNormalizedInput(makeSource(), { deduplicate: true });
+  assert.equal(deduplicated.poll()?.action, "move");
+  assert.equal(deduplicated.poll(), null);
+});
+
+test("teclas repetidas e digitação rápida chegam ao app sem deduplicação", () => {
+  const app = createSlateApp(() => Input({ id: "field", defaultValue: "" }), { viewport: { width: 12, height: 1 } });
+  app.focus("field");
+  const events = [{ kind: "key", code: "a" }, { kind: "key", code: "a" }, { kind: "key", code: "b" }];
+  const normalized = createNormalizedInput({ poll: () => events.shift() ?? null });
+  let event;
+  while ((event = normalized.poll()) !== null) {
+    app.dispatch(event);
+    app.flush();
+  }
+  assert.equal(app.getTree()?.props.value, "aab");
 });
 
 test("hit-test expõe o alvo, não propaga mouse fora da viewport e deixa disabled passar ao pai", () => {
@@ -556,4 +578,340 @@ test("frame dedupe permite retry depois de uma falha de escrita", () => {
   assert.throws(() => output.write("frame"), /falha transitória/);
   assert.equal(output.write("frame"), true);
   assert.equal(attempts, 2);
+});
+
+// --- regressões: React, entrada, ciclo de vida e layout ---------------------
+
+const flushReact = () => new Promise(resolve => setTimeout(resolve, 0));
+const childById = (tree, id) => tree?.children.find(child => child.id === id);
+
+test("React aplica updates de props, remove props e atualiza texto", async () => {
+  const React = await import("react");
+  const root = await createReactTerminalRoot({ viewport: { width: 20, height: 3 } });
+  const view = props => React.createElement(
+    "container",
+    { id: "root" },
+    React.createElement("text", { id: "msg", ...props }),
+    React.createElement("block", { id: "line" }, props.text)
+  );
+  root.render(view({ text: "old", foreground: "#ff0000" }));
+  await flushReact();
+  assert.equal(childById(root.app.getTree(), "msg")?.props.text, "old");
+  assert.equal(childById(root.app.getTree(), "msg")?.props.foreground, "#ff0000");
+  assert.equal(childById(root.app.getTree(), "line")?.children[0]?.props.text, "old");
+  root.render(view({ text: "new" }));
+  await flushReact();
+  assert.equal(childById(root.app.getTree(), "msg")?.props.text, "new");
+  assert.equal(childById(root.app.getTree(), "msg")?.props.foreground, undefined);
+  assert.equal(childById(root.app.getTree(), "line")?.children[0]?.props.text, "new");
+  assert.equal(root.app.getTree()?.children.length, 2);
+  root.close();
+});
+
+test("React reordena filhos com key sem duplicar IDs", async () => {
+  const React = await import("react");
+  const root = await createReactTerminalRoot({ viewport: { width: 20, height: 3 } });
+  const view = order => React.createElement("container", { id: "root" }, order.map(id => React.createElement("text", { key: id, id, text: id })));
+  root.render(view(["a", "b"]));
+  await flushReact();
+  assert.deepEqual(root.app.getTree()?.children.map(child => child.id), ["a", "b"]);
+  root.render(view(["b", "a"]));
+  await flushReact();
+  assert.deepEqual(root.app.getTree()?.children.map(child => child.id), ["b", "a"]);
+  root.render(view(["b"]));
+  await flushReact();
+  assert.deepEqual(root.app.getTree()?.children.map(child => child.id), ["b"]);
+  root.render(view([]));
+  await flushReact();
+  assert.deepEqual(root.app.getTree()?.children.map(child => child.id), []);
+  root.close();
+});
+
+test("fechar o app desmonta a árvore React e roda os cleanups", async () => {
+  const React = await import("react");
+  const root = await createReactTerminalRoot({ viewport: { width: 20, height: 2 } });
+  let cleanups = 0;
+  const Widget = () => {
+    React.useEffect(() => () => { cleanups += 1; }, []);
+    return React.createElement("text", { id: "msg", text: "React" });
+  };
+  root.render(React.createElement("container", { id: "root" }, React.createElement(Widget)));
+  await flushReact();
+  assert.equal(cleanups, 0);
+  root.app.close();
+  await flushReact();
+  assert.equal(cleanups, 1);
+  assert.equal(root.app.getTree(), null);
+  root.close();
+});
+
+test("Error Boundary renderiza o fallback sem derrubar o processo", async () => {
+  const React = await import("react");
+  const root = await createReactTerminalRoot({ viewport: { width: 20, height: 2 } });
+  class Boundary extends React.Component {
+    constructor(props) { super(props); this.state = { failed: false }; }
+    static getDerivedStateFromError() { return { failed: true }; }
+    render() { return this.state.failed ? React.createElement("text", { id: "fallback", text: "capturado" }) : this.props.children; }
+  }
+  const Boom = () => { throw new Error("falha do componente"); };
+  const logged = console.error;
+  console.error = () => {};
+  try {
+    root.render(React.createElement("container", { id: "root" }, React.createElement(Boundary, null, React.createElement(Boom))));
+    await flushReact();
+  } finally {
+    console.error = logged;
+  }
+  assert.equal(childById(root.app.getTree(), "fallback")?.props.text, "capturado");
+  root.close();
+});
+
+test("input não controlado aceita digitação contínua e edição no cursor", () => {
+  const app = createSlateApp(() => Input({ id: "field", defaultValue: "" }), { viewport: { width: 12, height: 1 } });
+  app.focus("field");
+  for (const code of ["a", "b", "c"]) {
+    app.dispatch({ kind: "key", code });
+    app.flush();
+  }
+  assert.equal(app.getTree()?.props.value, "abc");
+  app.dispatch({ kind: "key", code: "ArrowLeft" });
+  app.flush();
+  app.dispatch({ kind: "key", code: "X" });
+  app.flush();
+  assert.equal(app.getTree()?.props.value, "abXc");
+});
+
+test("input controlado com onChange move o cursor entre edições", () => {
+  const value = signal("ab");
+  const app = createSlateApp(() => Input({ id: "field", value: value.get(), onChange: next => { value.set(next); } }), { viewport: { width: 12, height: 1 } });
+  app.focus("field");
+  app.dispatch({ kind: "key", code: "ArrowLeft" });
+  app.flush();
+  app.dispatch({ kind: "key", code: "X" });
+  app.flush();
+  assert.equal(value.peek(), "aXb");
+});
+
+test("Select e Tabs navegam além do primeiro item", () => {
+  const app = createSlateApp(() => Container({ id: "app", direction: "column", children: [
+    Tabs({ id: "tabs", tabs: ["um", "dois", "tres"] }),
+    Select({ id: "sel", options: [{ label: "a" }, { label: "b" }, { label: "c" }] })
+  ] }), { viewport: { width: 20, height: 4 } });
+  app.focus("tabs");
+  app.dispatch({ kind: "key", code: "ArrowRight" });
+  app.flush();
+  app.dispatch({ kind: "key", code: "ArrowRight" });
+  app.flush();
+  assert.equal(childById(app.getTree(), "tabs")?.props.activeIndex, 2);
+  app.focus("sel");
+  app.dispatch({ kind: "key", code: "ArrowDown" });
+  app.flush();
+  app.dispatch({ kind: "key", code: "ArrowDown" });
+  app.flush();
+  assert.equal(childById(app.getTree(), "sel")?.props.selectedIndex, 2);
+});
+
+test("onEvent 'ignored' deixa o evento seguir para onKey e para o widget", () => {
+  const seen = [];
+  const app = createSlateApp(() => Button({
+    id: "press",
+    width: 4,
+    children: "x",
+    onEvent: () => { seen.push("event"); return "ignored"; },
+    onKey: () => { seen.push("key"); return "ignored"; },
+    onPress: () => { seen.push("press"); }
+  }), { viewport: { width: 4, height: 1 } });
+  app.focus("press");
+  assert.equal(app.dispatch({ kind: "key", code: "Enter" }), "consumed");
+  assert.deepEqual(seen, ["event", "key", "press"]);
+});
+
+test("Tab emite um frame novo mesmo sem mudar a árvore", async () => {
+  const app = createSlateApp(() => Container({ id: "app", direction: "column", children: [
+    Input({ id: "one" }),
+    Input({ id: "two" })
+  ] }), { viewport: { width: 12, height: 2 } });
+  app.focus("one");
+  let commits = 0;
+  app.subscribe(() => { commits += 1; });
+  assert.equal(app.dispatch({ kind: "key", code: "Tab" }), "consumed");
+  assert.equal(app.focused(), "two");
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(commits, 1);
+});
+
+test("spinner que começa parado inicia a animação quando é ligado", async () => {
+  const spinning = signal(false);
+  const app = createSlateApp(() => Spinner({ id: "spin", spinning }), { viewport: { width: 4, height: 1 } });
+  const writes = [];
+  const controller = createTerminalController(app, { poll: () => null }, { write: value => { writes.push(value); } }, { animationFps: 120 });
+  controller.start();
+  const before = writes.length;
+  spinning.set(true);
+  await new Promise(resolve => setTimeout(resolve, 80));
+  controller.close();
+  assert.ok(writes.length >= before + 2, `frames: ${writes.length - before}`);
+});
+
+test("layout mede uma List com todos os seus itens", () => {
+  const tree = resolveTree(Container({ id: "app", direction: "column", children: [
+    List({ id: "list", items: ["um", "dois", "tres"] }),
+    Block({ id: "after", text: "fim" })
+  ] }));
+  const layout = createFlexLayoutEngine().layout(tree, { width: 20, height: 8 });
+  assert.equal(layout.children.find(child => child.id === "list")?.layout.height, 3);
+  assert.equal(layout.children.find(child => child.id === "after")?.layout.y, 3);
+});
+
+test("árvores idênticas não geram operações e cor não recalcula layout", async () => {
+  const first = resolveTree(Container({ id: "app", direction: "column", gap: 1, children: [Block({ id: "x", text: "1" })] }));
+  const second = resolveTree(Container({ id: "app", direction: "column", gap: 1, children: [Block({ id: "x", text: "1" })] }));
+  assert.deepEqual(reconcile(first, second), []);
+  const color = signal("#ffffff");
+  const app = createSlateApp(() => Container({ id: "app", width: 10, height: 2, children: Block({ id: "b", text: "hi", foreground: color.get() }) }), { viewport: { width: 10, height: 2 } });
+  const layout = app.getLayout();
+  color.set("#ff0000");
+  app.flush();
+  assert.equal(app.getLayout(), layout);
+  assert.equal(app.getTree()?.children[0]?.props.foreground, "#ff0000");
+});
+
+test("computed pode ser descartado e para de recalcular", () => {
+  const source = signal(1);
+  let runs = 0;
+  const derived = computed(() => { runs += 1; return source.get() * 2; });
+  assert.equal(derived.get(), 2);
+  const before = runs;
+  derived.dispose();
+  source.set(3);
+  assert.equal(runs, before);
+  assert.equal(derived.peek(), 2);
+});
+
+test("signals de @slate-terminal/core disparam render no runtime react", async () => {
+  const core = await import("../../slate/dist/index.js");
+  const shared = core.signal(1);
+  const app = createSlateApp(() => Text({ id: "text", text: String(shared.get()) }), { viewport: { width: 8, height: 1 } });
+  assert.equal(app.getTree()?.props.text, "1");
+  shared.set(2);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(app.getTree()?.props.text, "2");
+});
+
+test("componentes de conveniência não colidem IDs", () => {
+  const grids = resolveTree(Container({ id: "app", children: [
+    Grid({ children: [Text({ text: "a" })] }),
+    Grid({ children: [Text({ text: "b" })] })
+  ] }));
+  assert.equal(grids?.children.length, 2);
+  const field = resolveTree(TextField({ id: "name", label: "Name" }));
+  assert.equal(field?.id, "name:field");
+  assert.equal(field?.children.at(-1)?.id, "name");
+});
+
+test("falha em render agendado chega ao controller e restaura o terminal", async () => {
+  const broken = signal(false);
+  const app = createSlateApp(() => {
+    if (broken.get()) throw new Error("render quebrado");
+    return Text({ id: "text", text: "ok" });
+  }, { viewport: { width: 8, height: 1 } });
+  let released = 0;
+  let failure;
+  const controller = createTerminalController(app, { poll: () => null, close: () => { released += 1; } }, { write: () => {} }, { onError: error => { failure = error; } });
+  controller.start();
+  broken.set(true);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.match(String(failure?.message), /render quebrado/);
+  assert.equal(released, 1);
+  assert.equal(controller.running(), false);
+});
+
+test("adaptador Yoga mantém o receptor dos setters e libera a árvore", () => {
+  const created = [];
+  let freedRecursive = 0;
+  class FakeYogaNode {
+    constructor() { this.style = {}; this.children = []; this.computed = { left: 0, top: 0, width: 0, height: 0 }; created.push(this); }
+    setWidth(value) { this.style.width = value; }
+    setHeight(value) { this.style.height = value; }
+    setFlexDirection(value) { this.style.flexDirection = value; }
+    setFlexGrow(value) { this.style.flexGrow = value; }
+    setFlexShrink(value) { this.style.flexShrink = value; }
+    setJustifyContent(value) { this.style.justifyContent = value; }
+    setAlignItems(value) { this.style.alignItems = value; }
+    setAlignSelf(value) { this.style.alignSelf = value; }
+    insertChild(child, index) { this.children.splice(index, 0, child); }
+    calculateLayout(width, height) {
+      this.computed = { left: 0, top: this.computed.top, width: this.style.width ?? width ?? 0, height: this.style.height ?? height ?? 0 };
+      let offset = 0;
+      for (const child of this.children) {
+        child.calculateLayout(this.computed.width, this.computed.height);
+        child.computed.top = offset;
+        offset += child.computed.height;
+      }
+    }
+    getComputedLeft() { return this.computed.left; }
+    getComputedTop() { return this.computed.top; }
+    getComputedWidth() { return this.computed.width; }
+    getComputedHeight() { return this.computed.height; }
+    getChildCount() { return this.children.length; }
+    getChild(index) { return this.children[index]; }
+    freeRecursive() { freedRecursive += 1; }
+  }
+  const engine = createYogaLayoutEngine({ Node: { create: () => new FakeYogaNode() } }, { constants: {} });
+  const tree = resolveTree(Container({ id: "root", children: Block({ id: "child", width: 7, height: 2 }) }));
+  const layout = engine.layout(tree, { width: 20, height: 5 });
+  assert.equal(layout.children[0]?.layout.width, 7);
+  assert.equal(layout.children[0]?.layout.height, 2);
+  assert.equal(created.length, 2);
+  assert.equal(freedRecursive, 1);
+});
+
+test("computed criado na view é liberado a cada render e no close", () => {
+  const source = signal(1);
+  let derivations = 0;
+  const app = createSlateApp(() => {
+    const doubled = computed(() => { derivations += 1; return source.get() * 2; });
+    return Text({ id: "text", text: String(doubled.get()) });
+  }, { viewport: { width: 8, height: 1 } });
+  app.flush();
+  app.flush();
+  // Three renders created three computeds; only the live one may recompute.
+  const beforeChange = derivations;
+  source.set(2);
+  assert.equal(derivations, beforeChange + 1);
+  app.flush();
+  const beforeClose = derivations;
+  app.close();
+  source.set(3);
+  assert.equal(derivations, beforeClose);
+});
+
+test("pares React/react-reconciler incompatíveis são recusados", () => {
+  // Pares suportados.
+  assert.deepEqual(checkReactCompatibility("19.2.8", "^19.0.0", 10), { reactMajor: 19, reconcilerMajor: 19, supported: true });
+  assert.deepEqual(checkReactCompatibility("18.3.1", "^18.2.0", 8), { reactMajor: 18, reconcilerMajor: 18, supported: true });
+  // Pares cruzados que o range de peers do npm não consegue excluir.
+  assert.equal(checkReactCompatibility("18.3.1", "^19.0.0", 10).supported, false);
+  assert.equal(checkReactCompatibility("19.2.8", "^18.2.0", 8).supported, false);
+  // peerDependencies sozinho já decide, antes de construir o reconciler.
+  assert.equal(checkReactCompatibility("19.2.8", "^18.2.0").supported, false);
+  assert.equal(checkReactCompatibility("18.3.1", "^18.2.0").supported, true);
+  // Sem peerDependencies legível, a aridade de createContainer decide a linha.
+  assert.equal(checkReactCompatibility("18.3.1", undefined, 10).supported, false);
+  assert.equal(checkReactCompatibility("18.3.1", undefined, 8).supported, true);
+  // Lado desconhecido nunca reprova: React não resolvível daqui, ou reconciler
+  // sem package.json legível e sem aridade conhecida.
+  assert.equal(checkReactCompatibility(undefined, "^19.0.0", 10).supported, true);
+  assert.equal(checkReactCompatibility("19.2.8", undefined).supported, true);
+});
+
+test("createReactTerminalRoot aceita o par instalado neste repositório", async () => {
+  const React = await import("react");
+  const compatibility = checkReactCompatibility(React.version ?? React.default.version, "^19.0.0", 10);
+  assert.equal(compatibility.supported, true);
+  const root = await createReactTerminalRoot({ viewport: { width: 8, height: 1 } });
+  root.close();
 });

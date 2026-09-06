@@ -33,6 +33,7 @@ jobs:
       - run: npm test
       - run: npm run examples:typecheck
       - run: npm run test:stress
+      - run: npm run test:react18
       - run: npm run pack:check
 
   windows:
@@ -47,6 +48,7 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm test
+      - run: npm run test:react18
       - run: npm run test:windows
       - name: Verify the same lifecycle under CMD
         shell: cmd

@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "lib": ["ES2022"]
   },
-  "include": ["tsx.fixture.tsx"]
+  "include": ["tsx.fixture.tsx", "types.fixture.ts"]
 }

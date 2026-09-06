@@ -1,4 +1,4 @@
-import type { EffectSpec, FlexStyle, NodeProps } from "./types.js";
+import type { EffectSpec, FlexStyle, NodeProps, ResolvedProps } from "./types.js";
 
 export interface SlateClassDefinition {
   readonly name: string;
@@ -15,7 +15,9 @@ export function getClass(name: string): SlateClassDefinition | undefined { retur
 export function defineClasses(definitions: readonly SlateClassDefinition[]): void { for (const definition of definitions) defineClass(definition); }
 export function classNames(...names: readonly (string | false | null | undefined)[]): string { return names.filter((name): name is string => Boolean(name)).join(" "); }
 export function classes(...names: readonly (string | false | null | undefined)[]): string { return classNames(...names); }
-export function resolveClasses(props: NodeProps): NodeProps {
+export function resolveClasses(props: NodeProps | ResolvedProps): ResolvedProps {
+  // Most nodes carry no class at all; skip the whole pipeline for those.
+  if (typeof props.className !== "string" && typeof props.class !== "string") return props as ResolvedProps;
   const source = [props.className, props.class].filter((value): value is string => typeof value === "string").join(" ");
   const names = source.split(/\s+/).filter(Boolean);
   const definitions = names.map(getClass).filter((definition): definition is SlateClassDefinition => definition !== undefined);
@@ -26,5 +28,5 @@ export function resolveClasses(props: NodeProps): NodeProps {
     foreground: result.foreground ?? definition.foreground,
     background: result.background ?? definition.background,
     effect: result.effect ?? definition.effect
-  }), props);
+  }), props as ResolvedProps);
 }
