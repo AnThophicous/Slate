@@ -6,10 +6,27 @@ node_modules/
 *.dll
 *.dylib
 *.so
-.DS_Store
+
+# Segredos e ambiente
 .env
+.env.*
+*.pem
+*.key
+*.p12
+credentials*
+secrets*
+
+# Dados e log locais
+*.log
+*.sqlite
+*.db
+
+# Ferramenta e sistema
+.DS_Store
+Thumbs.db
 .idea/
 .vscode/
 
-# Planejamento interno entre sessões
+# Planejamento e protocolo internos
 MapSource.md
+CLAUDE.md
