@@ -1,3 +1,5 @@
+import { extensionWidgetText } from "./extensions.js";
+import { currentMeasurePass } from "./measure.js";
 import { isSignal, readReactive, signal } from "./reactive.js";
 import { segmentGraphemes } from "./text.js";
 import { createElement } from "./vnode.js";
@@ -240,7 +242,31 @@ export function createTabsController(count: number, initial = 0): TabsController
   };
 }
 
+interface WidgetTextEntry {
+  readonly pass: number;
+  readonly frameIndex: number;
+  readonly lines: string[];
+}
+
+// Layout measures a widget and the renderer draws it: the same lines, computed
+// twice per frame, plus once more per intrinsic axis. The entry is stamped with
+// the measurement pass, so a new pass recomputes everything.
+const widgetTextCache = new WeakMap<ComponentTreeNode, WidgetTextEntry>();
+
 export function widgetText(node: ComponentTreeNode, frameIndex = 0): string[] {
+  const pass = currentMeasurePass();
+  const cached = widgetTextCache.get(node);
+  if (cached && cached.pass === pass && cached.frameIndex === frameIndex) return cached.lines;
+  const lines = computeWidgetText(node, frameIndex);
+  widgetTextCache.set(node, { pass, frameIndex, lines });
+  return lines;
+}
+
+function computeWidgetText(node: ComponentTreeNode, frameIndex: number): string[] {
+  // A registered extension owns its own node type, and layout measures exactly
+  // the lines it returns, like any built-in widget.
+  const extension = extensionWidgetText(node, frameIndex);
+  if (extension) return [...extension];
   const props = node.props;
   const value = props.value === undefined ? props.defaultValue : readWidgetValue(props.value);
   if (node.type === "input") return [String(value === undefined || value === "" ? readWidgetValue(props.placeholder) ?? "" : value)];

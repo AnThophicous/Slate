@@ -7,9 +7,11 @@ Rust, o runtime é exposto ao Node.js por bindings N-API e a API pública é
 TypeScript/TSX. Teclado, mouse, paste, resize e foco chegam à aplicação pelo
 mesmo contrato de eventos, em Linux, macOS e Windows.
 
-Versão atual: **2.2.0**. Próxima versão planejada: **2.3.0 — Coming Up: New
-Libraries and Extensions for React**
-([roadmap](#roadmap--230-coming-up-new-libraries-and-extensions-for-react)).
+Versão atual: **2.3.0 — New Libraries and Extensions for React**: ponto de
+extensão público para bibliotecas de terceiros, cache em disco com raiz única e
+pré-aquecimento, detecção de capacidade por terminal, console de baixo nível e
+uma rodada de performance no caminho de medição, layout e saída ANSI
+([o que mudou](#230--o-que-mudou)).
 
 ## Intenção do projeto
 
@@ -46,8 +48,8 @@ engenharia com critério de aceitação, não um slogan.
 | **Componentes próprios completos e customizáveis** | A biblioteca de componentes é do Slate, não um wrapper. Cada componente expõe estilo, comportamento e slots suficientes para ser reaproveitado sem fork. |
 | **APIs de baixo nível completas** | Acesso direto ao terminal para quem precisa de controle total: modos, cursor, buffers, escrita ANSI crua, entrada bruta e ciclo de vida da sessão, sem passar pela árvore de componentes. |
 
-O estado atual e o que ainda está planejado estão no
-[roadmap da 2.3.0](#roadmap--230-coming-up-new-libraries-and-extensions-for-react).
+A 2.3.0 executa esses alvos; o que ela entregou e o que continua planejado está
+em [2.3.0 — o que mudou](#230--o-que-mudou).
 
 ## Arquitetura
 
@@ -138,7 +140,15 @@ quando a interface precisa de cadência controlada.
 
 **Componentes.** `Container`, `Block`, `Text`, `Button`, `Input`, `Select`,
 `Checkbox`, `Tabs`, `Table`, `Spinner`, `Progress`, `Modal`, `ScrollView`,
-`List`, `Form`, `Glow`, `ColorShift`, `Image`, `Video` e `Media`.
+`List`, `Form`, `Glow`, `ColorShift`, `Image`, `Video` e `Media`. A camada
+composta acrescenta `Stack`, `Row`, `Grid`, `Panel`, `Card`, `Alert`, `Dialog`,
+`Menu`, `LogView`, `Gauge`, `KeyHint`, `StatusBar` e `Tree` (com `flattenTree`
+para percorrer as linhas visíveis).
+
+**Tema.** As cores dos componentes são tokens: `setTheme`, `getTheme`,
+`withTheme` e `themeColor` repintam `Panel`, `Card`, `Badge`, `Divider`,
+`Alert`, `Gauge`, `KeyHint` e `StatusBar` sem trocar de componente. Os valores
+padrão são exatamente os que os componentes já usavam.
 
 **Foco e entrada.** Navegação por Tab/Shift+Tab, mouse por hit-test de layout,
 atalhos via `onEvent`, paste, IME, cursor e resize. `createInputRouter` conecta
@@ -170,6 +180,107 @@ diretamente com `mimeType`. `Video` aceita uma sequência de `frames`:
 decodificação de MP4/WebM não é embutida no core, para não introduzir um codec
 falso nem uma dependência nativa obrigatória.
 
+## Capacidades e portabilidade
+
+`detectTerminalCapabilities()` resolve, a partir do ambiente, o que o terminal
+aceita: profundidade de cor, unicode, glifos largos, mouse, paste, foco,
+alternate screen, hyperlinks e protocolo de imagem. A detecção é uma função
+pura de `env`, `platform` e `isTty`, então a matriz de suporte é testável sem
+instalar o terminal — `capabilityMatrix()` devolve a mesma matriz que o
+runtime usa.
+
+```ts
+import { detectTerminalCapabilities, renderTreeToAnsi } from "@slate-terminal/react";
+
+const capabilities = detectTerminalCapabilities();
+const frame = renderTreeToAnsi(tree, layout, viewport, { capabilities });
+```
+
+O renderer degrada de acordo: truecolor vira `38;5;n` em terminais de 256
+cores, vira uma das oito cores base no console mínimo e desaparece quando a cor
+está desligada (`NO_COLOR`, `TERM=dumb`, saída sem TTY). Sem garantia de box
+drawing — o caso do CMD legado — as bordas saem em ASCII em vez de virar bloco
+de substituição. `colors`, `unicode` e `capabilities` também podem ser passados
+diretamente em `renderAnsi`.
+
+## Cache e pré-aquecimento
+
+Medição de texto, larguras de grapheme, quebra de linha e sequências SGR ficam
+em caches com limite declarado. O disco tem uma raiz única por versão, na
+convenção do sistema operacional:
+
+| Sistema | Raiz |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\slate-terminal\v2.3\` |
+| macOS | `~/Library/Caches/slate-terminal/v2.3/` |
+| Linux | `$XDG_CACHE_HOME/slate-terminal/v2.3/` (ou `~/.cache`) |
+
+As entradas são arquivos planos dentro de um único diretório `entries`, com
+limpeza por validade, por número de entradas e por tamanho. Cada sessão tem no
+máximo um diretório de scratch, removido no `close()`, na saída do processo e
+pela próxima sessão que o encontrar abandonado — nenhuma execução deixa pasta
+nova para trás. `SLATE_CACHE_DIR` troca a raiz e `SLATE_CACHE=0` desliga o
+disco.
+
+```ts
+import { openDiskCache, prewarm } from "@slate-terminal/react";
+
+// Fora do caminho crítico: aquece as amostras da execução anterior e para no
+// orçamento ou no sinal de cancelamento.
+const result = await prewarm({ viewport, samples: ["Salvar", "Cancelar"], budgetMs: 50 });
+openDiskCache().sweep();
+```
+
+`prewarmSync()` faz o mesmo de forma bloqueante, e `recordPrewarmSamples()`
+registra o texto que a aplicação vai desenhar para o próximo início.
+
+## Console de baixo nível
+
+`openConsole()` e `openInteractiveConsole()` dão acesso direto ao terminal sem
+passar pela árvore de componentes: modos, cursor, buffers, região de rolagem,
+título, escrita ANSI crua, entrada bruta e tamanho. `close()` é idempotente e
+desfaz cada modo na ordem inversa, inclusive na saída do processo.
+
+```ts
+import { ANSI, openInteractiveConsole } from "@slate-terminal/react";
+
+const terminal = openInteractiveConsole();
+try {
+  terminal.cursorTo(0, 0);
+  terminal.write(`${ANSI.clear("after")}pronto`);
+} finally {
+  terminal.close();
+}
+```
+
+`ANSI` é um construtor puro de sequências: nada nele toca em um stream, então
+serve tanto para escrever quanto para testar. Em `examples/node/lowlevel.mjs`
+essa camada aparece junto com capacidades, pré-aquecimento e uma extensão.
+
+## Extensões
+
+Um tipo de nó de terceiro é registrado com o mesmo contrato dos widgets do
+núcleo: o layout mede exatamente as linhas que ele imprime e os eventos chegam
+depois dos handlers do nó.
+
+```ts
+import { createWidget, registerExtension, runExtensionConformance } from "@slate-terminal/react";
+
+const sparkline = {
+  type: "sparkline",
+  text: node => [renderBars(node.props.values)]
+};
+
+const report = runExtensionConformance({ name: "minha-lib", widgets: [sparkline] });
+const registration = registerExtension({ name: "minha-lib", version: "1.0.0", widgets: [sparkline] });
+const Sparkline = createWidget(sparkline);
+```
+
+`runExtensionConformance()` é a suíte de conformidade: verifica que o type não
+colide com o núcleo, que `text()` é determinístico, que a saída não injeta
+sequências de controle e que `dispose()` devolve o registro ao estado anterior.
+Os tipos do núcleo são reservados; tentar redefinir um deles é erro.
+
 ## Integração com React
 
 React é opcional e tratado como integração de primeira classe, não como base do
@@ -192,85 +303,79 @@ Slate desmonta a árvore React e executa os cleanups dos componentes.
 `npm run test:react18` roda a suíte de React 18 contra o workspace privado
 `tests/react18`, com as versões travadas no lockfile da raiz e sem acesso à rede.
 
-## Roadmap — 2.3.0: Coming Up: New Libraries and Extensions for React
+## 2.3.0 — o que mudou
 
-A 2.3.0 ainda não foi lançada. O anúncio da versão é **aceitar o ecossistema
-React por completo**: além de renderizar componentes React, o Slate passa a
-aceitar bibliotecas React expansíveis rodando sobre o runtime de terminal. Em
-volta desse anúncio, a versão executa os
-[objetivos de engenharia](#objetivos-de-engenharia) do projeto: performance,
-compatibilidade entre sistemas operacionais, cache disciplinado e pré-aquecido,
-componentes próprios mais completos e APIs de baixo nível para controle total
-do console.
-
-A versão tem seis frentes, uma por objetivo de engenharia.
+O anúncio da versão é **aceitar o ecossistema React por completo**: além de
+renderizar componentes React, o Slate agora tem um ponto de extensão público
+para bibliotecas de terceiros rodarem sobre o runtime de terminal. Em volta
+desse anúncio, a versão executa os
+[objetivos de engenharia](#objetivos-de-engenharia) do projeto.
 
 ### 1. Ecossistema React
 
-- **Bibliotecas React de terceiros no terminal.** Componentes de bibliotecas
-  React que não dependam de DOM devem funcionar sobre o reconciliador do Slate,
-  sem fork e sem patch.
-- **Extensões oficiais.** Pacotes de extensão publicados sob `@slate-terminal/*`
-  para hooks, roteamento, state managers e componentes compostos.
-- **Ponto de extensão público.** Uma API declarada para registrar widgets, tipos
-  de nó e renderers de terceiros, com os mesmos IDs, eventos e ciclo de vida do
-  núcleo.
-- **Contrato de compatibilidade explícito.** O que uma biblioteca React precisa
-  cumprir para ser suportada, mais uma suíte de conformidade que verifica isso.
+- Ponto de extensão público: `registerExtension`, `registerWidget` e
+  `createWidget` registram tipos de nó de terceiros com os mesmos IDs,
+  medição, eventos e ciclo de vida dos widgets do núcleo.
+- Suíte de conformidade executável (`runExtensionConformance`): uma biblioteca
+  verifica antes de publicar se cumpre o contrato.
+- Componentes React que não dependem de DOM continuam rodando pelo
+  reconciliador, com a matriz de compatibilidade 18/19 verificada em CI.
+- **Ainda planejado:** pacotes de extensão oficiais publicados sob
+  `@slate-terminal/*` para hooks, roteamento e state managers.
 
 ### 2. Performance
 
-- Custo por frame proporcional ao subconjunto alterado, com o caminho quente de
-  medição e diff em Rust.
-- Orçamento de frame declarado e verificado por benchmark de regressão no CI,
-  em vez de medição pontual.
-- Alocação estável no ciclo de render: buffers reaproveitados entre frames,
-  sem realocar a árvore inteira a cada commit.
+- Frame completo (viewport 100x30, árvore pequena): **5,38 ms para 0,56 ms**.
+- Layout de 800 filhos: **28,6 ms para 8,3 ms**.
+- Render com frame de 500 filhos: **39,8 ms para 25,4 ms**.
+- Custos quadráticos removidos da pintura, da coleta de foco, do hit-test e da
+  quebra de linhas; somas por `spread` viraram laços, então uma árvore com
+  dezenas de milhares de filhos não estoura mais a pilha.
+- Medições memorizadas por passe, buffer de frame reaproveitado entre frames e
+  sequência SGR emitida só quando muda de verdade.
+- `npm run benchmark:check` compara cada cenário com o orçamento declarado em
+  `benchmarks/budget.json` e falha na regressão. O gate roda no CI.
 
 ### 3. Compatibilidade entre sistemas operacionais
 
-- Matriz de terminais suportados por sistema operacional, com o comportamento
-  esperado documentado por capacidade (cor, mouse, paste, imagem, resize).
-- Detecção de capacidade em tempo de execução, com degradação previsível
-  quando o terminal não oferece o recurso.
-- Windows tratado como alvo de primeira classe: CMD, PowerShell e Windows
-  Terminal cobertos por teste, não por suposição.
+- `detectTerminalCapabilities()` e `capabilityMatrix()`: detecção pura do
+  ambiente e matriz de suporte documentada por terminal.
+- Degradação previsível de cor (truecolor, 256, 8 cores, nenhuma) e bordas
+  ASCII quando o console não garante box drawing.
+- Windows segue como alvo de primeira classe: o console legado é detectado e a
+  saída se ajusta a ele. Slate não chama a Win32 Console API; o que ele faz é
+  reconhecer o host e não emitir o que ele não desenha.
 
 ### 4. Renderização visual com cache disciplinado
 
-- Pipeline visual com cache de medição de texto, layout resolvido e segmentos
-  ANSI recorrentes.
-- **Um diretório de cache, não uma pasta nova por execução.** Raiz única e
-  estável por versão, respeitando a convenção do sistema operacional, com
-  limite de tamanho, expiração e limpeza. Arquivos temporários da sessão são
-  removidos no encerramento, inclusive em falha.
-- Chave de cache derivada do conteúdo, para que duas execuções iguais
-  reaproveitem o trabalho em vez de recriá-lo.
+- Cache em memória com limite de entradas, bytes e validade.
+- Cache em disco com raiz única por versão, na convenção do sistema
+  operacional, entradas planas em um só diretório e limpeza por validade,
+  contagem e tamanho.
+- Um diretório de scratch por sessão, removido no encerramento, na saída do
+  processo e pela sessão seguinte quando ficou órfão.
 
 ### 5. Cache pré-aquecido
 
-- Pré-aquecimento do que é conhecido antes do primeiro frame: larguras de
-  grapheme, métricas de fonte, layout inicial e sequências ANSI de uso
-  frequente.
-- Aquecimento fora do caminho crítico e cancelável, para nunca atrasar o
-  primeiro render que deveria acelerar.
-- Alvo verificável: custo do primeiro frame comparável ao dos frames
-  seguintes, medido pelo mesmo benchmark.
+- `prewarm()` (assíncrono, cancelável por orçamento ou sinal) e
+  `prewarmSync()` medem as amostras da execução anterior e desenham um frame
+  sintético para encher o buffer e o cache de sequências.
+- O primeiro frame aquecido custa entre 30% e 60% do primeiro frame frio,
+  conforme a máquina.
 
 ### 6. Componentes próprios e APIs de baixo nível
 
-- Biblioteca de componentes mais completa e customizável, com estilo,
-  comportamento e slots expostos, para reaproveitamento sem fork.
-- Camada de baixo nível pública para controle total do console: modos de
-  terminal, cursor, buffers alternativos, escrita ANSI crua, entrada bruta e
-  ciclo de vida da sessão, utilizável sem a árvore de componentes.
-- No Windows, essa camada assume o console real (incluindo o CMD), em vez de
-  supor um terminal compatível com ANSI.
+- Tokens de tema aplicados aos componentes existentes, mais `Gauge`,
+  `KeyHint`, `StatusBar` e `Tree`.
+- `openConsole()` e `openInteractiveConsole()` expõem modos, cursor,
+  buffers, escrita crua, entrada bruta e tamanho, com encerramento idempotente
+  em ordem inversa.
+- Correções de layout que os componentes expunham: tamanho intrínseco passa a
+  contar padding, gap e margens, e widgets não controlados com `onChange`
+  voltam a avançar.
 
-A 2.3.0 segue a política aditiva da linha 2.x: nada do que existe hoje é
-removido nem muda de significado. Cada frente entra por tipos, funções e
-métodos novos. O status de cada item fica em [CHANGELOG.md](CHANGELOG.md) até o
-lançamento.
+A 2.3.0 é aditiva: nada que existia na linha 2.x foi removido ou mudou de
+significado. O detalhamento por item está no [CHANGELOG](CHANGELOG.md).
 
 ## Rust
 
@@ -295,6 +400,11 @@ cenário. A comparação com o Ink é opcional e só roda quando
 real — Ink não é dependência do Slate. Metodologia e ressalvas de leitura estão
 em [benchmarks/README.md](benchmarks/README.md).
 
+`npm run benchmark:check` é o gate: compara cada cenário com o orçamento em
+`benchmarks/budget.json` e sai com erro quando o frame regride. Em uma máquina
+mais lenta, `SLATE_BUDGET_SCALE` alarga o orçamento em vez de exigir edição do
+arquivo. O CI roda esse comando a cada push.
+
 ## Estabilidade
 
 A linha 2.x evolui de forma aditiva. APIs existentes não são removidas nem mudam
@@ -311,7 +421,9 @@ contrato de componentes, IDs, eventos e renderer é agnóstico de dispositivo.
 - [Especificação da 2.0](docs/slate-2.0.md)
 - [Política de API](API_POLICY.md) · [Changelog](CHANGELOG.md) ·
   [Contribuição](CONTRIBUTING.md) · [Segurança](SECURITY.md)
-- Exemplos executáveis em [`examples/`](examples).
+- Exemplos executáveis em [`examples/`](examples), incluindo
+  [`examples/node/lowlevel.mjs`](examples/node/lowlevel.mjs): capacidades,
+  console de baixo nível, pré-aquecimento e uma extensão em um só programa.
 
 ## Desenvolvimento
 
@@ -323,6 +435,7 @@ npm run typecheck
 npm test
 npm run test:react18
 npm run benchmark
+npm run benchmark:check   # orçamento de frame; falha na regressão
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings

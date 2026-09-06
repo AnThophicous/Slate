@@ -1,4 +1,6 @@
 import { isSignal } from "./reactive.js";
+import { colorParameters, type ColorDepth, type TerminalCapabilities } from "./capabilities.js";
+import { beginMeasurePass } from "./measure.js";
 import { graphemeWidth, sanitizeTerminalText, segmentGraphemes, splitLines, wrapText } from "./text.js";
 import { widgetText } from "./widgets.js";
 import { renderMedia } from "./media.js";
@@ -14,6 +16,14 @@ export interface TerminalRenderOptions {
   readonly defaultBackground?: string;
   readonly mediaProtocol?: "auto" | "kitty" | "iterm2" | "none";
   readonly cursor?: { readonly x: number; readonly y: number; readonly visible?: boolean };
+  /** Color depth of the output. Defaults to truecolor. */
+  readonly colors?: ColorDepth;
+  /** Emit Unicode box drawing. Defaults to true; false draws ASCII borders. */
+  readonly unicode?: boolean;
+  /** Detected capabilities, used for `colors` and `unicode` when they are omitted. */
+  readonly capabilities?: Partial<TerminalCapabilities>;
+  /** Reuse the pooled cell buffer between frames. Defaults to true. */
+  readonly reuseBuffer?: boolean;
 }
 
 interface Cell {
@@ -39,20 +49,35 @@ interface TerminalStyle {
   readonly link: string | undefined;
 }
 
+const EMPTY_STYLE: TerminalStyle = {
+  foreground: undefined,
+  background: undefined,
+  bold: undefined,
+  dim: undefined,
+  italic: undefined,
+  underline: undefined,
+  strikethrough: undefined,
+  link: undefined
+};
+
 export function renderTreeToAnsi(tree: ComponentTreeNode | null, layout: LayoutTreeNode | null, viewport: Viewport, options: TerminalRenderOptions = {}): string {
   const width = Math.max(0, Math.floor(viewport.width));
   const height = Math.max(0, Math.floor(viewport.height));
-  const cells = Array.from({ length: height }, () => Array.from({ length: width }, () => ({
-    char: " ",
-    foreground: undefined,
-    background: undefined,
-    bold: undefined,
-    dim: undefined,
-    italic: undefined,
-    underline: undefined,
-    strikethrough: undefined,
-    link: undefined
-  })) as Cell[]);
+  const depth = options.colors ?? options.capabilities?.colors ?? "truecolor";
+  const unicode = options.unicode ?? options.capabilities?.unicode ?? true;
+  const pooled = options.reuseBuffer !== false;
+  // Painting measures widget text again; a pass of its own keeps those
+  // measurements memoized for this frame only.
+  beginMeasurePass();
+  const cells = acquireBuffer(width, height, pooled);
+  try {
+    return paintFrame(tree, layout, cells, width, height, depth, unicode, options);
+  } finally {
+    releaseBuffer(cells, pooled);
+  }
+}
+
+function paintFrame(tree: ComponentTreeNode | null, layout: LayoutTreeNode | null, cells: Cell[][], width: number, height: number, depth: ColorDepth, unicode: boolean, options: TerminalRenderOptions): string {
   if (tree && layout) {
     paint(tree, layout, cells, { x: 0, y: 0, width, height }, {
       foreground: normalizeHex(options.defaultForeground),
@@ -63,38 +88,42 @@ export function renderTreeToAnsi(tree: ComponentTreeNode | null, layout: LayoutT
       underline: undefined,
       strikethrough: undefined,
       link: undefined
-    }, options.frameIndex ?? 0, undefined);
+    }, options.frameIndex ?? 0, undefined, unicode);
   }
   const output: string[] = [];
   if (options.clear !== false) output.push("\u001b[2J");
   output.push("\u001b[H");
   if (options.hideCursor !== false) output.push("\u001b[?25l");
+  // Styles are compared by the code they produce, not by their fields: at a
+  // reduced color depth two different colors collapse to the same sequence, and
+  // re-emitting it would cost bytes without changing a single cell.
+  const defaultCode = styleCode(EMPTY_STYLE, depth);
+  const previous = createCell();
   for (const [rowIndex, row] of cells.entries()) {
-    let previous: TerminalStyle = {
-      foreground: undefined,
-      background: undefined,
-      bold: undefined,
-      dim: undefined,
-      italic: undefined,
-      underline: undefined,
-      strikethrough: undefined,
-      link: undefined
-    };
+    let previousLink: string | undefined;
+    let previousCode = defaultCode;
+    resetCell(previous);
     let line = "";
     for (const cell of row) {
-      const style = cellStyle(cell);
-      if (cell.link !== previous.link) {
-        if (previous.link !== undefined) line += hyperlinkCode();
+      if (cell.link !== previousLink) {
+        if (previousLink !== undefined) line += hyperlinkCode();
         if (cell.link !== undefined) line += hyperlinkCode(cell.link);
+        previousLink = cell.link;
       }
-      if (!sameStyle(style, previous)) {
-        line += styleCode(style);
+      // Neighbouring cells almost always share a style, so the sequence is only
+      // rebuilt when the attributes actually change.
+      if (!sameCellStyle(cell, previous)) {
+        const code = styleCode(cellStyle(cell), depth);
+        if (code !== previousCode) {
+          line += code;
+          previousCode = code;
+        }
+        copyCellStyle(cell, previous);
       }
-      previous = style;
       line += cell.char;
     }
-    if (previous.link !== undefined) line += hyperlinkCode();
-    if (hasStyle(previous)) line += "\u001b[0m";
+    if (previousLink !== undefined) line += hyperlinkCode();
+    if (previousCode !== defaultCode) line += "\u001b[0m";
     // Do not rely on LF preserving column zero: terminals differ when a row
     // reaches the right edge and may leave the next row horizontally shifted.
     output.push(rowIndex === 0 ? line : `\u001b[${rowIndex + 1};1H${line}`);
@@ -122,7 +151,98 @@ export function findLayoutNode(layout: LayoutTreeNode | null, id: string | numbe
   return undefined;
 }
 
-function paint(tree: ComponentTreeNode, layout: LayoutTreeNode, cells: Cell[][], parentClip: LayoutRect, inherited: TerminalStyle, frameIndex: number, inheritedEffect: EffectSpec | undefined): void {
+/**
+ * Frame buffers are the largest allocation in a render and their size rarely
+ * changes, so one buffer per viewport size is reused across frames. A render
+ * that starts while another is still painting (a signal read that renders
+ * again) gets its own buffer instead of corrupting the pooled one.
+ */
+let pooledBuffer: Cell[][] | undefined;
+let pooledWidth = -1;
+let pooledHeight = -1;
+let pooledInUse = false;
+
+function acquireBuffer(width: number, height: number, pooled: boolean): Cell[][] {
+  if (pooled && !pooledInUse && pooledBuffer && pooledWidth === width && pooledHeight === height) {
+    pooledInUse = true;
+    resetBuffer(pooledBuffer);
+    return pooledBuffer;
+  }
+  const buffer = Array.from({ length: height }, () => Array.from({ length: width }, createCell));
+  if (pooled && !pooledInUse) {
+    pooledBuffer = buffer;
+    pooledWidth = width;
+    pooledHeight = height;
+    pooledInUse = true;
+  }
+  return buffer;
+}
+
+function releaseBuffer(cells: Cell[][], pooled: boolean): void {
+  if (pooled && cells === pooledBuffer) pooledInUse = false;
+}
+
+function sameCellStyle(cell: Cell, other: Cell): boolean {
+  return cell.foreground === other.foreground
+    && cell.background === other.background
+    && cell.bold === other.bold
+    && cell.dim === other.dim
+    && cell.italic === other.italic
+    && cell.underline === other.underline
+    && cell.strikethrough === other.strikethrough;
+}
+
+function copyCellStyle(cell: Cell, target: Cell): void {
+  target.foreground = cell.foreground;
+  target.background = cell.background;
+  target.bold = cell.bold;
+  target.dim = cell.dim;
+  target.italic = cell.italic;
+  target.underline = cell.underline;
+  target.strikethrough = cell.strikethrough;
+}
+
+function resetCell(cell: Cell): void {
+  cell.char = " ";
+  cell.foreground = undefined;
+  cell.background = undefined;
+  cell.bold = undefined;
+  cell.dim = undefined;
+  cell.italic = undefined;
+  cell.underline = undefined;
+  cell.strikethrough = undefined;
+  cell.link = undefined;
+}
+
+function createCell(): Cell {
+  return {
+    char: " ",
+    foreground: undefined,
+    background: undefined,
+    bold: undefined,
+    dim: undefined,
+    italic: undefined,
+    underline: undefined,
+    strikethrough: undefined,
+    link: undefined
+  };
+}
+
+function resetBuffer(cells: Cell[][]): void {
+  for (const row of cells) {
+    for (const cell of row) resetCell(cell);
+  }
+}
+
+/** Drops the pooled frame buffer. Output is unchanged; only allocation is. */
+export function clearFrameBuffer(): void {
+  if (pooledInUse) return;
+  pooledBuffer = undefined;
+  pooledWidth = -1;
+  pooledHeight = -1;
+}
+
+function paint(tree: ComponentTreeNode, layout: LayoutTreeNode, cells: Cell[][], parentClip: LayoutRect, inherited: TerminalStyle, frameIndex: number, inheritedEffect: EffectSpec | undefined, unicode: boolean): void {
   if (tree.props.visible === false || (tree.type === "modal" && tree.props.open !== undefined && readValue(tree.props.open) === false) || layout.layout.width < 1 || layout.layout.height < 1) return;
   const clip = layout.clip ? intersect(parentClip, layout.clip) : parentClip;
   if (clip.width < 1 || clip.height < 1) return;
@@ -147,11 +267,14 @@ function paint(tree: ComponentTreeNode, layout: LayoutTreeNode, cells: Cell[][],
   for (let index = 0; index < lines.length; index += 1) {
     drawText(cells, origin.x, origin.y + index, lines[index] ?? "", clip, style, effect, frameIndex, index);
   }
+  // A linear search per child is quadratic on a wide container; one index per
+  // parent keeps painting proportional to the number of nodes.
+  const index = childIndex(tree);
   for (const childLayout of layout.children) {
-    const child = tree.children.find(candidate => candidate.id === childLayout.id);
-    if (child) paint(child, childLayout, cells, clip, style, frameIndex, effect);
+    const child = index.get(childLayout.id);
+    if (child) paint(child, childLayout, cells, clip, style, frameIndex, effect, unicode);
   }
-  drawBorder(cells, layout.layout, clip, style, tree.props.border);
+  drawBorder(cells, layout.layout, clip, style, tree.props.border, unicode);
 }
 
 function collectMedia(tree: ComponentTreeNode | null, layout: LayoutTreeNode | null, protocol: "auto" | "kitty" | "iterm2" | "none", frameIndex: number): string[] {
@@ -171,11 +294,23 @@ function collectMedia(tree: ComponentTreeNode | null, layout: LayoutTreeNode | n
     });
     if (rendered) output.push(rendered);
   }
+  const index = childIndex(tree);
   for (const childLayout of layout.children) {
-    const child = tree.children.find(candidate => candidate.id === childLayout.id);
+    const child = index.get(childLayout.id);
     if (child) output.push(...collectMedia(child, childLayout, protocol, frameIndex));
   }
   return output;
+}
+
+const childIndexCache = new WeakMap<ComponentTreeNode, Map<string | number, ComponentTreeNode>>();
+
+function childIndex(node: ComponentTreeNode): Map<string | number, ComponentTreeNode> {
+  const cached = childIndexCache.get(node);
+  if (cached) return cached;
+  const index = new Map<string | number, ComponentTreeNode>();
+  for (const child of node.children) index.set(child.id, child);
+  childIndexCache.set(node, index);
+  return index;
 }
 
 function readMediaValue(value: unknown, mimeType: unknown): MediaSource | string | undefined {
@@ -191,10 +326,10 @@ function isMimeType(value: string): boolean {
   return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/iu.test(value);
 }
 
-function drawBorder(cells: Cell[][], rect: LayoutRect, clip: LayoutRect, inherited: TerminalStyle, value: unknown): void {
+function drawBorder(cells: Cell[][], rect: LayoutRect, clip: LayoutRect, inherited: TerminalStyle, value: unknown, unicode: boolean): void {
   const border = normalizeBorder(value);
   if (!border || rect.width < 1 || rect.height < 1) return;
-  const glyphs = borderGlyphs(border.style);
+  const glyphs = borderGlyphs(border.style, unicode);
   const style = border.color ? { ...inherited, foreground: normalizeHex(border.color) ?? inherited.foreground } : inherited;
   const left = rect.x;
   const top = rect.y;
@@ -229,7 +364,10 @@ function normalizeBorder(value: unknown): BorderSpec | undefined {
   return { style, color: typeof value.color === "string" ? value.color : undefined };
 }
 
-function borderGlyphs(style: BorderSpec["style"]): { readonly topLeft: string; readonly topRight: string; readonly bottomLeft: string; readonly bottomRight: string; readonly horizontal: string; readonly vertical: string } {
+function borderGlyphs(style: BorderSpec["style"], unicode = true): { readonly topLeft: string; readonly topRight: string; readonly bottomLeft: string; readonly bottomRight: string; readonly horizontal: string; readonly vertical: string } {
+  // A console without box drawing shows replacement blocks, which is worse than
+  // an honest ASCII frame.
+  if (!unicode) return { topLeft: "+", topRight: "+", bottomLeft: "+", bottomRight: "+", horizontal: "-", vertical: "|" };
   if (style === "double") return { topLeft: "╔", topRight: "╗", bottomLeft: "╚", bottomRight: "╝", horizontal: "═", vertical: "║" };
   if (style === "rounded") return { topLeft: "╭", topRight: "╮", bottomLeft: "╰", bottomRight: "╯", horizontal: "─", vertical: "│" };
   if (style === "heavy") return { topLeft: "┏", topRight: "┓", bottomLeft: "┗", bottomRight: "┛", horizontal: "━", vertical: "┃" };
@@ -378,23 +516,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function styleCode(style: TerminalStyle): string {
+// The same handful of styles repeat across every cell of every frame, so the
+// SGR string is built once per distinct style and depth.
+const styleCodeCache = new Map<string, string>();
+const MAX_STYLE_CODES = 2048;
+
+function styleCode(style: TerminalStyle, depth: ColorDepth): string {
+  const key = `${depth}|${style.foreground ?? ""}|${style.background ?? ""}|${style.bold ? 1 : 0}${style.dim ? 1 : 0}${style.italic ? 1 : 0}${style.underline ? 1 : 0}${style.strikethrough ? 1 : 0}`;
+  const cached = styleCodeCache.get(key);
+  if (cached !== undefined) return cached;
   const codes: string[] = ["0"];
   if (style.bold) codes.push("1");
   if (style.dim) codes.push("2");
   if (style.italic) codes.push("3");
   if (style.underline) codes.push("4");
   if (style.strikethrough) codes.push("9");
-  const foregroundRgb = rgb(style.foreground);
-  const backgroundRgb = rgb(style.background);
-  if (foregroundRgb) codes.push(`38;2;${foregroundRgb.join(";")}`);
-  if (backgroundRgb) codes.push(`48;2;${backgroundRgb.join(";")}`);
-  return `\u001b[${codes.join(";")}m`;
-}
-
-function rgb(value: string | undefined): readonly [number, number, number] | undefined {
-  if (!value) return undefined;
-  return [Number.parseInt(value.slice(1, 3), 16), Number.parseInt(value.slice(3, 5), 16), Number.parseInt(value.slice(5, 7), 16)];
+  const foreground = style.foreground ? colorParameters(style.foreground, depth, "foreground") : undefined;
+  const background = style.background ? colorParameters(style.background, depth, "background") : undefined;
+  if (foreground) codes.push(foreground);
+  if (background) codes.push(background);
+  const code = `\u001b[${codes.join(";")}m`;
+  if (styleCodeCache.size >= MAX_STYLE_CODES) styleCodeCache.clear();
+  styleCodeCache.set(key, code);
+  return code;
 }
 
 function cellStyle(cell: Cell): TerminalStyle {
@@ -419,17 +563,6 @@ function applyStyle(cell: Cell, style: TerminalStyle): void {
   if (style.underline !== undefined) cell.underline = style.underline;
   if (style.strikethrough !== undefined) cell.strikethrough = style.strikethrough;
   if (style.link !== undefined) cell.link = style.link;
-}
-
-function sameStyle(left: TerminalStyle, right: TerminalStyle): boolean {
-  return left.foreground === right.foreground
-    && left.background === right.background
-    && left.bold === right.bold
-    && left.dim === right.dim
-    && left.italic === right.italic
-    && left.underline === right.underline
-    && left.strikethrough === right.strikethrough
-    && left.link === right.link;
 }
 
 function hasStyle(style: TerminalStyle): boolean {

@@ -37,7 +37,20 @@ Exports principais:
 - componentes: `Container`, `Block`, `Text`, `Button`, `Input`, `Select`, `Checkbox`, `Tabs`, `Table`, `Spinner`, `Progress`, `Modal`, `ScrollView`, `List`, `Form`, `Glow`, `ColorShift`;
 - mídia: `Image`, `Video`, `Media`, `loadMediaFile`, `createMediaSource`, `renderMedia` (Kitty/iTerm2 com fallback textual);
 - apresentação: `LogView`, `TextStyle`, `LogLine`, `LogRun`, `wrapText`;
+- composição: `Panel`, `Card`, `Alert`, `Dialog`, `Menu`, `Gauge`, `KeyHint`, `StatusBar`, `Tree`, `flattenTree`;
+- tema: `createTheme`, `setTheme`, `getTheme`, `withTheme`, `themeColor`, `themeSpacing`;
+- capacidades: `detectTerminalCapabilities`, `capabilityMatrix`, `describeCapabilities`, `colorParameters`;
+- console de baixo nível: `openConsole`, `openInteractiveConsole`, `ANSI`;
+- cache: `createMemoryCache`, `openDiskCache`, `resolveCacheRoot`, `createSessionScratch`, `clearTextCaches`;
+- pré-aquecimento: `prewarm`, `prewarmSync`, `recordPrewarmSamples`;
+- extensões: `registerExtension`, `registerWidget`, `createWidget`, `runExtensionConformance`;
 - infraestrutura: `resolveTree`, `reconcile`, `createSlateRoot`, `renderTreeToAnsi`.
+
+Desde a 2.3.0, `renderAnsi`/`renderTreeToAnsi` aceitam `capabilities`, `colors`
+e `unicode`: a saída degrada para 256 cores, 8 cores ou nenhuma, e desenha
+bordas ASCII quando o console não garante box drawing. `detectTerminalCapabilities()`
+é uma função pura do ambiente, então esse comportamento é testável sem o
+terminal real.
 
 Callbacks use the `ignored`, `consumed`, `render`, or `exit` contract. IDs are unique per tree and stable during reconciliation. `createSlateOutput` suppresses duplicate frames; direct writes remain available for integrations that need them.
 

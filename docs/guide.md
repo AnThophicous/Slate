@@ -1,4 +1,4 @@
-# Guia de produção da Slate 2.1
+# Guia de produção da Slate 2.3
 
 Este é o guia completo para construir uma interface de terminal com Slate. Ele
 explica a arquitetura, a escolha dos pacotes, o ciclo de vida do terminal,
@@ -776,6 +776,7 @@ npm run build
 npm run typecheck
 npm test
 npm run test:windows
+npm run benchmark:check
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -800,7 +801,184 @@ Teste separadamente layout, hit-test, resize, output e reconciler React. Um
 teste de app não deve depender de cursor físico ou de largura do terminal do
 desenvolvedor.
 
-## 20. Referência rápida da API
+## 20. Capacidades do terminal
+
+Terminais discordam sobre cor, unicode, mouse, imagem e hyperlink. Em vez de
+adivinhar em cada ponto do código, resolva uma vez:
+
+~~~ts
+import { capabilityMatrix, describeCapabilities, detectTerminalCapabilities } from "@slate-terminal/react";
+
+const capabilities = detectTerminalCapabilities();
+console.error(describeCapabilities(capabilities));
+// windows-terminal@win32 cores=truecolor unicode=sim mouse=sim imagem=none tty=sim
+~~~
+
+A detecção é uma função pura de `env`, `platform` e `isTty`. Passe esses
+valores para testar qualquer terminal sem instalá-lo:
+
+~~~ts
+const legacy = detectTerminalCapabilities({ platform: "win32", env: {}, isTty: true });
+legacy.terminal;  // "conhost"
+legacy.colors;    // "256"
+legacy.unicode;   // false
+~~~
+
+Entregue o resultado ao renderer e a saída se ajusta sozinha: a cor cai para
+`38;5;n`, para as oito cores base ou desaparece, e as bordas viram ASCII
+quando o console não garante box drawing.
+
+~~~ts
+const frame = app.renderAnsi({ capabilities });
+// ou explicitamente
+const plain = app.renderAnsi({ colors: "none", unicode: false });
+~~~
+
+`capabilityMatrix()` devolve a matriz que o runtime assume por terminal, útil
+para documentar o suporte da sua aplicação.
+
+## 21. Cache e pré-aquecimento
+
+Medir texto é o trabalho mais repetido de um frame. A Slate memoriza
+segmentação, largura, quebra de linha e sequências SGR em caches com limite
+declarado, e guarda em disco o que vale a pena reaproveitar entre execuções.
+
+A raiz do cache é única por versão e segue a convenção do sistema operacional:
+`%LOCALAPPDATA%\slate-terminal\v2.3` no Windows,
+`~/Library/Caches/slate-terminal/v2.3` no macOS e
+`$XDG_CACHE_HOME/slate-terminal/v2.3` no Linux. As entradas são arquivos
+planos em um único diretório; nenhuma execução cria pasta nova.
+
+~~~ts
+import { createSessionScratch, openDiskCache } from "@slate-terminal/react";
+
+const cache = openDiskCache();          // { dir, get, set, sweep, stats, clear }
+cache.set(cache.key("layout", 80, 24), JSON.stringify(snapshot));
+cache.sweep();                          // validade, contagem e tamanho
+
+const scratch = createSessionScratch();  // um diretório por sessão
+try {
+  scratch.file("frame.txt", frame);
+} finally {
+  scratch.close();                       // removido também na saída do processo
+}
+~~~
+
+`SLATE_CACHE_DIR` troca a raiz e `SLATE_CACHE=0` desliga o disco inteiro —
+útil em CI e em ambientes somente leitura, onde a API continua funcionando com
+`enabled: false`.
+
+O pré-aquecimento usa esse cache para encurtar o primeiro frame:
+
+~~~ts
+import { prewarm, recordPrewarmSamples } from "@slate-terminal/react";
+
+recordPrewarmSamples(["Salvar", "Cancelar", "Configurações"]);
+const controller = new AbortController();
+const result = await prewarm({ viewport, budgetMs: 50, signal: controller.signal });
+result.cancelled;  // true se o orçamento ou o sinal interromperam
+~~~
+
+O aquecimento roda fora do caminho crítico, para em `budgetMs` ou no sinal, e
+o que já aqueceu permanece aquecido. `prewarmSync()` existe para quando a
+aplicação prefere bloquear. Nenhum dos dois muda a saída: `clearTextCaches()`
+e `clearFrameBuffer()` devolvem o runtime ao estado frio e o frame é o mesmo.
+
+## 22. Console de baixo nível
+
+Quando a árvore de componentes não é o que você quer, use o console direto. Ele
+dá modos, cursor, buffers, região de rolagem, título, escrita crua, entrada
+bruta e tamanho, com o mesmo cuidado de encerramento do controller.
+
+~~~ts
+import { ANSI, openConsole, openInteractiveConsole } from "@slate-terminal/react";
+
+const terminal = openInteractiveConsole();  // raw + alternate + mouse + paste + foco
+try {
+  terminal.cursorTo(0, 0);
+  terminal.write("pronto");
+  const stop = terminal.onData(chunk => process.stderr.write(JSON.stringify(chunk)));
+  const stopResize = terminal.onResize(viewport => app.setViewport(viewport));
+  stop();
+  stopResize();
+} finally {
+  terminal.close();  // desfaz cada modo na ordem inversa; idempotente
+}
+~~~
+
+`openConsole()` abre sem ligar nada, para quando você quer escolher os modos
+um a um. `ANSI` constrói sequências sem tocar em stream algum, o que o torna
+testável:
+
+~~~ts
+ANSI.cursorTo(4, 2);          // "\u001b[3;5H"
+ANSI.alternateScreen(false);  // "\u001b[?1049l"
+~~~
+
+Cada modo ligado empilha sua restauração; `close()` as executa na ordem
+inversa e também roda na saída do processo, então uma falha no meio do caminho
+não deixa o terminal em raw mode.
+
+## 23. Extensões e bibliotecas de terceiros
+
+Uma biblioteca pode registrar tipos de nó próprios. O layout mede exatamente as
+linhas que o widget imprime e os eventos chegam depois dos handlers do nó, como
+em qualquer widget do núcleo.
+
+~~~ts
+import { createWidget, registerExtension, runExtensionConformance } from "@slate-terminal/react";
+
+const sparkline = {
+  type: "sparkline",
+  defaultProps: { focusable: true },
+  text: node => [bars(node.props.values)],
+  handleEvent: (node, event) => (event.kind === "key" && event.code === "Space" ? "consumed" : "ignored")
+};
+
+const report = runExtensionConformance({ name: "minha-lib", widgets: [sparkline] });
+if (!report.passed) throw new Error(JSON.stringify(report.checks.filter(check => !check.passed)));
+
+const registration = registerExtension({ name: "minha-lib", version: "1.0.0", widgets: [sparkline] });
+const Sparkline = createWidget(sparkline);
+// ...
+registration.dispose();  // remove widgets, classes e o teardown do setup
+~~~
+
+Regras do contrato:
+
+- O `type` não pode ser um dos tipos do núcleo; a tentativa é um erro.
+- `text()` precisa ser determinístico para a mesma entrada: layout e pintura
+  chamam a mesma função e precisam concordar.
+- Sequências de controle na saída de `text()` são removidas pelo renderer; a
+  suíte de conformidade reprova a extensão que as emite.
+- `dispose()` devolve o registro ao estado anterior, inclusive quando a mesma
+  extensão foi registrada duas vezes.
+
+## 24. Tema e componentes compostos
+
+As cores dos componentes são tokens, com os mesmos valores padrão de antes:
+
+~~~ts
+import { Gauge, KeyHint, StatusBar, Tree, setTheme, withTheme } from "@slate-terminal/react";
+
+setTheme({ colors: { surface: "#101828", primary: "#7dd3fc" }, border: "rounded" });
+
+const painel = Panel({ id: "painel", title: "Recursos", children: [
+  Gauge({ id: "cpu", label: "CPU", value: cpu, max: 1, size: 24 }),
+  Tree({ id: "arquivos", nodes: [{ label: "src", children: [{ label: "index.ts" }] }] }),
+  StatusBar({ id: "status", left: "pronto", right: "v2.3.0" }),
+  KeyHint({ id: "atalhos", hints: [{ key: "^C", label: "sair" }, { key: "Tab", label: "próximo" }] })
+] });
+~~~
+
+O tema vive em um signal: trocá-lo durante a sessão re-renderiza quem o lê.
+`withTheme(tema, corpo)` aplica um tema apenas dentro do bloco e restaura o
+anterior, inclusive quando o corpo lança.
+
+`flattenTree(nodes)` devolve as linhas visíveis com profundidade e estado de
+expansão, para quem precisa da navegação por índice do `Tree`.
+
+## 25. Referência rápida da API
 
 Runtime: render, createApp, createSlateApp, mount, unmount, close, flush,
 getTree, getLayout, setViewport, update, append, remove, dispatch, focus, blur,
@@ -819,6 +997,24 @@ ColorShift.
 
 React: createReactAdapter, createSlateReactRenderer, createReactTerminalRoot,
 renderReact, adaptLegacyRenderer.
+
+Capacidades: detectTerminalCapabilities, capabilityMatrix, describeCapabilities,
+colorParameters, ansi256Index, ansiBasicIndex.
+
+Cache: createMemoryCache, openDiskCache, resolveCacheRoot, createSessionScratch,
+hashKey, cacheEnabled, clearTextCaches, textCacheStats, clearFrameBuffer.
+
+Pré-aquecimento: prewarm, prewarmSync, recordPrewarmSamples, warmTextCaches,
+warmString.
+
+Console: openConsole, openInteractiveConsole, ANSI.
+
+Extensões: registerExtension, registerWidget, createWidget, getWidget,
+listExtensions, listWidgets, clearExtensions, runExtensionConformance.
+
+Tema e componentes: createTheme, setTheme, getTheme, peekTheme, withTheme,
+resetTheme, themeColor, themeSpacing, Gauge, KeyHint, StatusBar, Tree,
+flattenTree.
 
 Quando uma API tiver dúvida de comportamento, observe primeiro o contrato de
 evento e o layout exposto por getLayoutNode(id). A Slate foi desenhada para

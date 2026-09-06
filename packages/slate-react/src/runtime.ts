@@ -1,4 +1,5 @@
 import { batch, isSignal, signal, track } from "./reactive.js";
+import { extensionWidgetEvent } from "./extensions.js";
 import { createFocusManager, collectFocusable, hitTest, pathTo, type FocusManager } from "./focus.js";
 import { createFlexLayoutEngine, type LayoutEngine, type LayoutTreeNode, type Viewport } from "./flex.js";
 import { createSlateRoot, reconcile, type ReconcileOperation } from "./reconcile.js";
@@ -604,7 +605,9 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
       if (result !== "ignored") return result;
     }
     if ((node.type === "scrollView" || node.type === "list") && isScrollEvent(event)) return handleScroll(node, event);
-    return "ignored";
+    // Extension widgets get the last word on their own node types, after the
+    // node's handlers and controller, exactly like a built-in widget would.
+    return extensionWidgetEvent(node, event) ?? "ignored";
   }
 
   function handleInput(node: ComponentTreeNode, event: SlateEvent): EventResult {
@@ -674,28 +677,14 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     const current = clampInteger(readNodeValue(node, "selectedIndex", 0), options.length - 1, 0);
     const next = findEnabled(options, current, direction);
     if (next === current) return "consumed";
-    const callback = node.props.onChange;
-    if (typeof callback === "function") {
-      const result = callback(next, node);
-      return isEventResult(result) ? result : "render";
-    }
-    if (isControlled(node, "selectedIndex")) return "consumed";
-    writeNodeValue(node, "selectedIndex", next);
-    return "render";
+    return commitWidgetValue(node, "selectedIndex", next);
   }
 
   function handleCheckbox(node: ComponentTreeNode, event: SlateEvent): EventResult {
     if (event.kind === "key" && event.phase === "release") return "ignored";
     if (!((event.kind === "key" && (event.code === " " || event.code === "Space" || event.code === "Enter")) || (event.kind === "mouse" && event.action === "press" && event.button === "left"))) return "ignored";
-    const callback = node.props.onChange;
     const next = !Boolean(readNodeValue(node, "checked", false));
-    if (typeof callback === "function") {
-      const result = callback(next, node);
-      return isEventResult(result) ? result : "render";
-    }
-    if (isControlled(node, "checked")) return "consumed";
-    writeNodeValue(node, "checked", next);
-    return "render";
+    return commitWidgetValue(node, "checked", next);
   }
 
   function handleTabs(node: ComponentTreeNode, event: SlateEvent): EventResult {
@@ -707,14 +696,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     if (direction === 0) return "ignored";
     const current = clampInteger(readNodeValue(node, "activeIndex", 0), tabs.length - 1, 0);
     const next = (current + direction + tabs.length) % tabs.length;
-    const callback = node.props.onChange;
-    if (typeof callback === "function") {
-      const result = callback(next, node);
-      return isEventResult(result) ? result : "render";
-    }
-    if (isControlled(node, "activeIndex")) return "consumed";
-    writeNodeValue(node, "activeIndex", next);
-    return "render";
+    return commitWidgetValue(node, "activeIndex", next);
   }
 
   function handleList(node: ComponentTreeNode, event: SlateEvent): EventResult {
@@ -737,14 +719,25 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     if (next === undefined) return "ignored";
     const current = clampInteger(readNodeValue(node, "activeIndex", 0), items.length - 1, 0);
     if (next === current) return "consumed";
+    return commitWidgetValue(node, "activeIndex", next);
+  }
+
+  /**
+   * Applies a widget's new value and notifies the application.
+   *
+   * An `onChange` listener observes the widget; it does not take ownership of
+   * the value. Only a declared, non-writable prop makes the widget controlled,
+   * and only then does Slate leave its internal slot untouched.
+   */
+  function commitWidgetValue(node: ComponentTreeNode, property: ValueProperty, next: string | number | boolean): EventResult {
+    const controlled = isControlled(node, property);
+    if (!controlled) writeNodeValue(node, property, next);
     const callback = node.props.onChange;
     if (typeof callback === "function") {
       const result = callback(next, node);
       return isEventResult(result) ? result : "render";
     }
-    if (isControlled(node, "activeIndex")) return "consumed";
-    writeNodeValue(node, "activeIndex", next);
-    return "render";
+    return controlled ? "consumed" : "render";
   }
 
   function handleScroll(node: ComponentTreeNode, event: SlateEvent): EventResult {

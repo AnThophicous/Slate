@@ -1,4 +1,4 @@
-export const VERSION = "2.2.0" as const;
+export const VERSION = "2.3.0" as const;
 
 export * from "./types.js";
 export * from "./vnode.js";
@@ -19,3 +19,10 @@ export * from "./input.js";
 export * from "./scrollback.js";
 export * from "./identity.js";
 export * from "./classes.js";
+export * from "./text.js";
+export * from "./theme.js";
+export * from "./cache.js";
+export * from "./capabilities.js";
+export * from "./console.js";
+export * from "./extensions.js";
+export * from "./prewarm.js";

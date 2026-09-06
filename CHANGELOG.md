@@ -1,9 +1,26 @@
 # Changelog
 
-## [Unreleased]
+## [2.3.0] - 2026-09-06
+
+Slate 2.3.0 abre o runtime para o ecossistema React, entrega cache em disco e
+pré-aquecimento, detecção de capacidade por terminal, uma camada de acesso
+direto ao console e uma rodada de performance no caminho de medição, layout e
+saída ANSI.
 
 ### Added
 
+- Extensões: `registerExtension`, `registerWidget`, `createWidget`, `getWidget`, `listExtensions` e `clearExtensions` registram tipos de nó de terceiros com os mesmos IDs, medição, eventos e ciclo de vida dos widgets do núcleo.
+- `runExtensionConformance()` verifica uma extensão antes da publicação: type livre, `text()` determinístico, saída sem sequências de controle e `dispose()` que devolve o registro ao estado anterior.
+- Cache: `createMemoryCache` (LRU com limite de entradas, bytes e ttl), `openDiskCache`, `resolveCacheRoot`, `createSessionScratch` e `hashKey`. A raiz é única por versão e segue a convenção do sistema operacional (`%LOCALAPPDATA%`, `~/Library/Caches`, `$XDG_CACHE_HOME`), com `SLATE_CACHE_DIR` para sobrepor e `SLATE_CACHE=0` para desligar.
+- O disco guarda entradas como arquivos planos em um único diretório, com limpeza por ttl, por número de entradas e por tamanho; o scratch da sessão é removido no `close()`, na saída do processo e pela próxima sessão que o encontrar abandonado.
+- Pré-aquecimento: `prewarm()` (assíncrono, cancelável por `budgetMs` ou `signal`), `prewarmSync()`, `recordPrewarmSamples()` e `warmString()`. O aquecimento mede as amostras da execução anterior, gravadas no cache, e desenha um frame sintético para encher o buffer e o cache de sequências SGR.
+- Capacidades: `detectTerminalCapabilities()`, `capabilityMatrix()`, `describeCapabilities()`, `colorParameters()`, `ansi256Index()` e `ansiBasicIndex()`. A detecção é função pura do ambiente, então a matriz é testável sem instalar o terminal.
+- Console de baixo nível: `openConsole()`, `openInteractiveConsole()` e o construtor de sequências `ANSI`. Modos, cursor, buffers, regiões de rolagem, título, entrada crua e tamanho ficam acessíveis sem a árvore de componentes, com `close()` idempotente que desfaz cada modo na ordem inversa.
+- Tema: `setTheme`, `getTheme`, `peekTheme`, `withTheme`, `resetTheme`, `themeColor` e `themeSpacing`. Os tokens têm exatamente as cores que os componentes usavam antes, então trocar o tema repinta a interface sem trocar de componente.
+- Componentes: `Gauge`, `KeyHint`, `StatusBar`, `Tree` e `flattenTree`.
+- Medição: `clearTextCaches()`, `textCacheStats()`, `warmTextCaches()` e `clearFrameBuffer()`.
+- `TerminalRenderOptions` aceita `colors`, `unicode`, `capabilities` e `reuseBuffer`.
+- `npm run benchmark:check` compara os cenários com o orçamento declarado em `benchmarks/budget.json` e falha quando o frame regride; `SLATE_BUDGET_SCALE` acomoda máquinas mais lentas. O gate roda no CI.
 - `Image`, `Video` e `Media` com sources tipados, `loadMediaFile()` e saída opcional para Kitty/iTerm2; sem suporte visual, o `alt` segue no grid.
 - `createTerminalSession()` para ativar capacidades interativas com rollback e um único caminho de encerramento.
 - Captura de ponteiro para `press`/`drag`/`release`, tamanho inicial opcional da fonte e um exemplo Node mais completo.
@@ -12,6 +29,9 @@
 
 ### Changed
 
+- O renderer degrada a cor para `256`, `basic` ou `none` conforme a capacidade do terminal e desenha bordas ASCII quando o console não garante box drawing (CMD legado).
+- A sequência SGR só é emitida quando muda de verdade: em profundidade reduzida, duas cores diferentes viram o mesmo código e deixam de gerar bytes repetidos.
+- Medições de texto, largura, quebra de linha e tamanho intrínseco são memorizadas por passe; um passe novo invalida tudo, então um signal alterado nunca é servido de um cache velho.
 - `createNormalizedInput` não deduplica mais por padrão: dois eventos consecutivos iguais são duas entregas reais. Use `{ deduplicate: true }` apenas em fontes que comprovadamente repetem a entrega.
 - `NodeProps` perdeu o índice `[property: string]: unknown`, então props inválidas (`width: "banana"`, `disabled: "yes"`) passam a ser erro de tipo em todos os widgets.
 - `computed()` devolve `dispose()` e é liberado junto com o efeito ou o render que o criou.
@@ -21,6 +41,9 @@
 
 ### Fixed
 
+- O tamanho intrínseco passa a contar padding, gap e margens dos filhos. Um `Panel` era medido como 2x1 e sumia atrás da borda; uma `Row` com `spacing` espremia o primeiro filho e quebrava o texto no meio.
+- `Select`, `Tabs`, `Checkbox` e `List` não controlados avançam mesmo com um `onChange` conectado: observar o valor não transfere a posse dele. Só uma prop declarada e não gravável torna o widget controlado.
+- Containers largos deixam de ter custo quadrático: pintura, coleta de foco, hit-test e acumulação de linhas passam a indexar os filhos, e as somas por `spread` viraram laços (uma árvore com dezenas de milhares de filhos estourava a pilha).
 - Falhas de input, render e output agora fecham polling, desmontam o app e tentam restaurar o terminal; `onError` e `error()` expõem o diagnóstico.
 - O reconciliador React separa props de filhos, remove props que sumiram do render, atualiza texto e trata reordenação como movimento em vez de duplicar nós.
 - `createContainer` recebe os três callbacks de erro do react-reconciler 0.31 e a assinatura de 8 argumentos da linha 0.29; Error Boundaries renderizam o fallback sem derrubar o processo, e React 18 volta a aplicar updates. O teste (`npm run test:react18`) roda contra o workspace privado `tests/react18`, com react 18.3.1 e react-reconciler 0.29.2 travados no lockfile da raiz — sem instalação dinâmica nem rede.
@@ -40,6 +63,15 @@
 - Texto externo não consegue injetar sequências de controle ANSI no renderer TypeScript ou Rust.
 - Botões e checkboxes não tratam clique direito como ativação.
 - O deduplicador de frames permite repetir uma escrita depois de uma falha transitória.
+
+### Performance
+
+Medido por `npm run benchmark:check` na mesma máquina, antes e depois desta versão:
+
+- Frame completo (viewport 100x30, árvore pequena): 5,38 ms para 0,56 ms por frame.
+- Layout de 800 filhos: 28,6 ms para 8,3 ms.
+- Render de 500 filhos com frame: 39,8 ms para 25,4 ms.
+- Primeiro frame com o cache pré-aquecido: entre 30% e 60% do custo do primeiro frame frio, conforme a máquina.
 
 ## [2.2.0] - 2026-08-30
 

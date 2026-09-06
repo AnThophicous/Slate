@@ -59,9 +59,10 @@ export function collectFocusable(tree: ComponentTreeNode, layout: LayoutTreeNode
 
 export function hitTest(tree: ComponentTreeNode, layout: LayoutTreeNode, x: number, y: number): readonly ComponentTreeNode[] {
   if (!contains(layout, x, y) || !renderedNode(tree)) return [];
+  const nodes = nodeIndex(tree);
   for (let index = layout.children.length - 1; index >= 0; index -= 1) {
     const childLayout = layout.children[index];
-    const child = childLayout ? tree.children.find(candidate => candidate.id === childLayout.id) : undefined;
+    const child = childLayout ? nodes.get(childLayout.id) : undefined;
     if (!child || !childLayout) continue;
     const path = hitTest(child, childLayout, x, y);
     if (path.length > 0) return [...path, tree];
@@ -81,10 +82,34 @@ export function pathTo(tree: ComponentTreeNode, id: ElementId): readonly Compone
 function collect(tree: ComponentTreeNode, layout: LayoutTreeNode, result: FocusTarget[]): void {
   if (!renderedNode(tree)) return;
   if (tree.props.focusable === true && tree.props.disabled !== true) result.push({ node: tree, layout });
+  // Pairing children by a linear search is quadratic on a wide container, and
+  // focus collection runs on every commit.
+  const layouts = layoutIndex(layout);
   for (const child of tree.children) {
-    const childLayout = layout.children.find(candidate => candidate.id === child.id);
+    const childLayout = layouts.get(child.id);
     if (child && childLayout) collect(child, childLayout, result);
   }
+}
+
+const layoutIndexCache = new WeakMap<LayoutTreeNode, Map<ElementId, LayoutTreeNode>>();
+const nodeIndexCache = new WeakMap<ComponentTreeNode, Map<ElementId, ComponentTreeNode>>();
+
+function layoutIndex(layout: LayoutTreeNode): Map<ElementId, LayoutTreeNode> {
+  const cached = layoutIndexCache.get(layout);
+  if (cached) return cached;
+  const index = new Map<ElementId, LayoutTreeNode>();
+  for (const child of layout.children) index.set(child.id, child);
+  layoutIndexCache.set(layout, index);
+  return index;
+}
+
+function nodeIndex(node: ComponentTreeNode): Map<ElementId, ComponentTreeNode> {
+  const cached = nodeIndexCache.get(node);
+  if (cached) return cached;
+  const index = new Map<ElementId, ComponentTreeNode>();
+  for (const child of node.children) index.set(child.id, child);
+  nodeIndexCache.set(node, index);
+  return index;
 }
 
 function contains(layout: LayoutTreeNode, x: number, y: number): boolean {

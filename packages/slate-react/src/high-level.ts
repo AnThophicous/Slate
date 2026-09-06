@@ -41,19 +41,9 @@ export async function renderReact(element: unknown, options: SlateAppOptions & P
   return root;
 }
 
-export interface SlateTheme {
-  readonly colors: Readonly<Record<string, string>>;
-  readonly spacing: Readonly<Record<string, number>>;
-  readonly radius?: Readonly<Record<string, number>>;
-}
-
-export function createTheme(theme: Partial<SlateTheme> = {}): SlateTheme {
-  return {
-    colors: { primary: "#38bdf8", success: "#4ade80", warning: "#facc15", danger: "#fb7185", muted: "#64748b", background: "#0f172a", foreground: "#f8fafc", ...theme.colors },
-    spacing: { xs: 0, sm: 1, md: 2, lg: 3, xl: 4, ...theme.spacing },
-    radius: theme.radius
-  };
-}
+// The theme moved to its own module when the components started reading it;
+// it is re-exported here so existing imports keep working.
+export { createTheme, getTheme, peekTheme, resetTheme, setTheme, themeColor, themeSignal, themeSpacing, withTheme, type SlateTheme } from "./theme.js";
 
 export type EventMatcher = (event: import("./types.js").SlateEvent) => boolean;
 export function onKey(code: string, handler: import("./types.js").EventHandler): import("./types.js").EventHandler {

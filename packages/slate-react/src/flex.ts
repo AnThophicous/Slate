@@ -1,4 +1,5 @@
 import { isSignal, readReactive } from "./reactive.js";
+import { beginMeasurePass, currentMeasurePass } from "./measure.js";
 import { displayWidth, splitLines, wrappedLineCount } from "./text.js";
 import { widgetText } from "./widgets.js";
 import type { ComponentTreeNode, ElementId, FlexDimension, FlexStyle, HostType, Overflow } from "./types.js";
@@ -114,12 +115,17 @@ export interface YogaAdapterOptions {
 
 export function createFlexLayoutEngine(): LayoutEngine {
   return {
-    layout: (tree, viewport) => layoutNode(tree, {
-      x: readNumber(tree.props.x, 0),
-      y: readNumber(tree.props.y, 0),
-      width: Math.max(0, readDimension(tree.props.width, viewport.width, viewport.width)),
-      height: Math.max(0, readDimension(tree.props.height, viewport.height, viewport.height))
-    }, true, null)
+    layout: (tree, viewport) => {
+      // One pass per layout: measurements are memoized inside it and discarded
+      // by the next one, so a signal that changed is never served from a cache.
+      beginMeasurePass();
+      return layoutNode(tree, {
+        x: readNumber(tree.props.x, 0),
+        y: readNumber(tree.props.y, 0),
+        width: Math.max(0, readDimension(tree.props.width, viewport.width, viewport.width)),
+        height: Math.max(0, readDimension(tree.props.height, viewport.height, viewport.height))
+      }, true, null);
+    }
   };
 }
 
@@ -130,6 +136,7 @@ export function createYogaLayoutEngine(runtime: YogaRuntime, options: YogaAdapte
       // Every node created here holds native memory. The whole subtree is
       // released, not only the root, and it is released even when a
       // measurement throws.
+      beginMeasurePass();
       const created: YogaNodeLike[] = [];
       const root = createYogaNode(tree, runtime, constants, created);
       try {
@@ -165,8 +172,14 @@ function layoutNode(node: ComponentTreeNode, frame: LayoutRect, isRoot: boolean,
   const overflowY = style.overflowY ?? style.overflow ?? "visible";
   const clip = clipFor(overflowX, overflowY, layout, parentClip);
   const childLayouts = layoutChildren(node, content, style, clip);
-  const contentRight = Math.max(content.x + content.width, ...childLayouts.map(child => child.layout.x + child.layout.width));
-  const contentBottom = Math.max(content.y + content.height, ...childLayouts.map(child => child.layout.y + child.layout.height));
+  // A spread over every child would allocate an argument list per node, and a
+  // container with tens of thousands of children would overflow the stack.
+  let contentRight = content.x + content.width;
+  let contentBottom = content.y + content.height;
+  for (const child of childLayouts) {
+    contentRight = Math.max(contentRight, child.layout.x + child.layout.width);
+    contentBottom = Math.max(contentBottom, child.layout.y + child.layout.height);
+  }
   const scrollWidth = Math.max(content.width, contentRight - content.x);
   const scrollHeight = Math.max(content.height, contentBottom - content.y);
   const requestedLeft = readNumber(style.scrollLeft, readNumber(node.props.scrollLeft, 0));
@@ -205,13 +218,29 @@ function layoutChildren(node: ComponentTreeNode, content: LayoutRect, style: Fle
   const crossGap = resolveGap(direction === "row" ? style.rowGap ?? style.gap : style.columnGap ?? style.gap, crossSize);
   const metrics = children.map(child => metric(child, direction, content.width, content.height));
   const lines: Metric[][] = [[]];
-  for (const current of metrics) {
-    const line = lines[lines.length - 1];
-    const occupied = line.reduce((sum, item) => sum + item.baseMain + item.mainMargin, 0) + Math.max(0, line.length) * mainGap;
-    if (wrap !== "nowrap" && line.length > 0 && occupied + current.baseMain + current.mainMargin > mainSize) lines.push([current]);
-    else line.push(current);
+  if (wrap === "nowrap") {
+    lines[0] = [...metrics];
+  } else {
+    // The occupied size is carried forward instead of being summed again for
+    // every child: a single wrapped container should not cost O(n²).
+    let occupied = 0;
+    for (const current of metrics) {
+      const line = lines[lines.length - 1];
+      const required = occupied + (line.length > 0 ? mainGap : 0) + current.baseMain + current.mainMargin;
+      if (line.length > 0 && required > mainSize) {
+        lines.push([current]);
+        occupied = current.baseMain + current.mainMargin;
+        continue;
+      }
+      line.push(current);
+      occupied = required;
+    }
   }
-  const lineCrossSizes = lines.map(line => Math.max(0, ...line.map(item => item.baseCross + item.crossMargin)));
+  const lineCrossSizes = lines.map(line => {
+    let largest = 0;
+    for (const item of line) largest = Math.max(largest, item.baseCross + item.crossMargin);
+    return largest;
+  });
   const totalCross = lineCrossSizes.reduce((sum, size) => sum + size, 0) + Math.max(0, lines.length - 1) * crossGap;
   const freeCross = Math.max(0, crossSize - totalCross);
   const contentDistribution = distributeCross(style.alignContent, freeCross, lines.length, crossGap);
@@ -462,14 +491,26 @@ interface Edges {
   readonly left: number;
 }
 
+const EDGE_KEYS = {
+  padding: { top: "paddingTop", right: "paddingRight", bottom: "paddingBottom", left: "paddingLeft" },
+  margin: { top: "marginTop", right: "marginRight", bottom: "marginBottom", left: "marginLeft" }
+} as const;
+
+const NO_EDGES: Edges = { top: 0, right: 0, bottom: 0, left: 0 };
+
 function readEdges(style: FlexStyle, kind: "padding" | "margin", width: number, height: number): Edges {
+  const keys = EDGE_KEYS[kind];
+  // Most nodes declare no padding or margin at all. Measuring runs this for
+  // every node on every pass, so the empty case allocates nothing.
+  if (style[kind] === undefined && style[keys.top] === undefined && style[keys.right] === undefined && style[keys.bottom] === undefined && style[keys.left] === undefined) {
+    return NO_EDGES;
+  }
   const all = resolveDimension(style[kind], width, 0);
-  const prefix = kind;
   return {
-    top: resolveDimension(style[`${prefix}Top` as keyof FlexStyle] as FlexDimension | undefined, height, all),
-    right: resolveDimension(style[`${prefix}Right` as keyof FlexStyle] as FlexDimension | undefined, width, all),
-    bottom: resolveDimension(style[`${prefix}Bottom` as keyof FlexStyle] as FlexDimension | undefined, height, all),
-    left: resolveDimension(style[`${prefix}Left` as keyof FlexStyle] as FlexDimension | undefined, width, all)
+    top: resolveDimension(style[keys.top], height, all),
+    right: resolveDimension(style[keys.right], width, all),
+    bottom: resolveDimension(style[keys.bottom], height, all),
+    left: resolveDimension(style[keys.left], width, all)
   };
 }
 
@@ -514,27 +555,88 @@ function snapRect(value: LayoutRect): LayoutRect {
   return { x: Math.round(value.x), y: Math.round(value.y), width: Math.max(0, Math.round(value.width)), height: Math.max(0, Math.round(value.height)) };
 }
 
+interface IntrinsicEntry {
+  pass: number;
+  readonly values: Map<string, number>;
+}
+
+// Flex asks for the same node's intrinsic size several times per pass: once
+// per axis while measuring the line, and again when the parent resolves its own
+// size. The answers cannot change inside a pass, so they are computed once.
+const intrinsicCache = new WeakMap<ComponentTreeNode, IntrinsicEntry>();
+
 function intrinsicSize(node: ComponentTreeNode, axis: "width" | "height", availableWidth = Number.POSITIVE_INFINITY): number {
+  const pass = currentMeasurePass();
+  const key = `${axis}:${availableWidth}`;
+  let entry = intrinsicCache.get(node);
+  if (entry && entry.pass === pass) {
+    const cached = entry.values.get(key);
+    if (cached !== undefined) return cached;
+  } else {
+    entry = { pass, values: new Map() };
+    intrinsicCache.set(node, entry);
+  }
+  const value = computeIntrinsicSize(node, axis, availableWidth);
+  entry.values.set(key, value);
+  return value;
+}
+
+function computeIntrinsicSize(node: ComponentTreeNode, axis: "width" | "height", availableWidth: number): number {
   const ownText = readText(node);
   const lines = splitLines(ownText);
   const textWidth = textWidthConstraint(node, availableWidth);
   const own = axis === "width"
-    ? Math.max(1, ...lines.map(displayWidth))
+    ? widestLine(lines)
     : Math.max(1, node.props.wrapText === false ? lines.length : wrappedLineCount(ownText, textWidth));
-  if (node.children.length === 0) return own;
   const style = readStyle(node);
+  // Percent edges need a basis. Width has one; height does not exist yet at
+  // measurement time, so percent vertical edges measure as zero instead of
+  // inventing a number.
+  const edgeBasis = Number.isFinite(availableWidth) ? availableWidth : 0;
+  const padding = readEdges(style, "padding", edgeBasis, 0);
+  const paddingWidth = padding.left + padding.right;
+  const paddingHeight = padding.top + padding.bottom;
+  if (node.children.length === 0) return own + (axis === "width" ? paddingWidth : paddingHeight);
   const direction = style.flexDirection ?? "column";
   const children = node.children.filter(renderedNode);
+  // Gaps and margins occupy real cells. Leaving them out of the intrinsic size
+  // makes a container smaller than its own content, and the children are then
+  // squeezed or wrapped inside a box that was measured without them.
+  const spacing = (count: number, gap: number): number => Math.max(0, count - 1) * gap;
   if (axis === "width") {
-    const childWidth = direction === "row"
-      ? children.reduce((sum, child) => sum + intrinsicSize(child, "width", availableWidth), 0)
-      : Math.max(0, ...children.map(child => intrinsicSize(child, "width", availableWidth)));
-    return Math.max(own, childWidth);
+    const inner = Number.isFinite(availableWidth) ? Math.max(0, availableWidth - paddingWidth) : availableWidth;
+    let childWidth = 0;
+    for (const child of children) {
+      const width = intrinsicSize(child, "width", inner) + horizontalMargin(child, inner);
+      childWidth = direction === "row" ? childWidth + width : Math.max(childWidth, width);
+    }
+    if (direction === "row") childWidth += spacing(children.length, resolveGap(style.columnGap ?? style.gap, edgeBasis));
+    return Math.max(own, childWidth) + paddingWidth;
   }
-  const childHeight = direction === "column"
-    ? children.reduce((sum, child) => sum + intrinsicSize(child, "height", textWidth), 0)
-    : Math.max(0, ...children.map(child => intrinsicSize(child, "height", textWidth)));
-  return Math.max(own, childHeight);
+  const innerText = Number.isFinite(textWidth) ? Math.max(0, textWidth - paddingWidth) : textWidth;
+  let childHeight = 0;
+  for (const child of children) {
+    const height = intrinsicSize(child, "height", innerText) + verticalMargin(child, edgeBasis);
+    childHeight = direction === "column" ? childHeight + height : Math.max(childHeight, height);
+  }
+  if (direction === "column") childHeight += spacing(children.length, resolveGap(style.rowGap ?? style.gap, edgeBasis));
+  return Math.max(own, childHeight) + paddingHeight;
+}
+
+function widestLine(lines: readonly string[]): number {
+  let widest = 1;
+  for (const line of lines) widest = Math.max(widest, displayWidth(line));
+  return widest;
+}
+
+function horizontalMargin(node: ComponentTreeNode, basis: number): number {
+  const margin = readEdges(readStyle(node), "margin", Number.isFinite(basis) ? basis : 0, 0);
+  return margin.left + margin.right;
+}
+
+function verticalMargin(node: ComponentTreeNode, basis: number): number {
+  const margin = readEdges(readStyle(node), "margin", basis, 0);
+  return margin.top + margin.bottom;
 }
 
 function textWidthConstraint(node: ComponentTreeNode, availableWidth: number): number {
