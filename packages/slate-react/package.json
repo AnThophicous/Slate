@@ -68,8 +68,8 @@
     "react-reconciler": "^0.31.0"
   },
   "peerDependencies": {
-    "react": ">=18",
-    "react-reconciler": ">=0.29.0 <0.32.0",
+    "react": "^18.3.0 || ^19.0.0",
+    "react-reconciler": "^0.29.2 || ^0.31.0",
     "yoga-layout": ">=3"
   },
   "peerDependenciesMeta": {

@@ -95,50 +95,56 @@ function resolveValue(value: SlateChild, path: string, stack: Set<SlateVNode>): 
   return result;
 }
 
+/**
+ * Layout props that are also accepted at the top level of a node. The table is
+ * built once: rebuilding it per node made every render allocate one entry array
+ * per alias.
+ */
+export const STYLE_ALIASES: readonly (readonly [string, string])[] = Object.entries({
+  direction: "flexDirection",
+  wrap: "flexWrap",
+  gap: "gap",
+  rowGap: "rowGap",
+  columnGap: "columnGap",
+  flexGrow: "flexGrow",
+  flexShrink: "flexShrink",
+  flexBasis: "flexBasis",
+  width: "width",
+  height: "height",
+  minWidth: "minWidth",
+  maxWidth: "maxWidth",
+  minHeight: "minHeight",
+  maxHeight: "maxHeight",
+  justifyContent: "justifyContent",
+  alignItems: "alignItems",
+  alignContent: "alignContent",
+  alignSelf: "alignSelf",
+  padding: "padding",
+  paddingTop: "paddingTop",
+  paddingRight: "paddingRight",
+  paddingBottom: "paddingBottom",
+  paddingLeft: "paddingLeft",
+  margin: "margin",
+  marginTop: "marginTop",
+  marginRight: "marginRight",
+  marginBottom: "marginBottom",
+  marginLeft: "marginLeft",
+  position: "position",
+  top: "top",
+  right: "right",
+  bottom: "bottom",
+  left: "left",
+  overflow: "overflow",
+  overflowX: "overflowX",
+  overflowY: "overflowY",
+  scrollLeft: "scrollLeft",
+  scrollTop: "scrollTop"
+});
+
 function normalizeProps(props: ResolvedProps): ResolvedProps {
   const result = { ...props } as Record<string, unknown>;
   const style = { ...(isRecord(result.style) ? result.style : {}) } as Record<string, unknown>;
-  const aliases: Readonly<Record<string, string>> = {
-    direction: "flexDirection",
-    wrap: "flexWrap",
-    gap: "gap",
-    rowGap: "rowGap",
-    columnGap: "columnGap",
-    flexGrow: "flexGrow",
-    flexShrink: "flexShrink",
-    flexBasis: "flexBasis",
-    width: "width",
-    height: "height",
-    minWidth: "minWidth",
-    maxWidth: "maxWidth",
-    minHeight: "minHeight",
-    maxHeight: "maxHeight",
-    justifyContent: "justifyContent",
-    alignItems: "alignItems",
-    alignContent: "alignContent",
-    alignSelf: "alignSelf",
-    padding: "padding",
-    paddingTop: "paddingTop",
-    paddingRight: "paddingRight",
-    paddingBottom: "paddingBottom",
-    paddingLeft: "paddingLeft",
-    margin: "margin",
-    marginTop: "marginTop",
-    marginRight: "marginRight",
-    marginBottom: "marginBottom",
-    marginLeft: "marginLeft",
-    position: "position",
-    top: "top",
-    right: "right",
-    bottom: "bottom",
-    left: "left",
-    overflow: "overflow",
-    overflowX: "overflowX",
-    overflowY: "overflowY",
-    scrollLeft: "scrollLeft",
-    scrollTop: "scrollTop"
-  };
-  for (const [source, target] of Object.entries(aliases)) {
+  for (const [source, target] of STYLE_ALIASES) {
     if (result[source] !== undefined && style[target] === undefined) style[target] = result[source];
   }
   result.style = style;

@@ -57,7 +57,7 @@ O fluxo normal é:
 
 ~~~text
 fonte nativa/customizada
-        ↓ normalizeEvent + deduplicação
+        ↓ normalizeEvent
 createInputRouter
         ↓ app.dispatch
 hit-test ou caminho focado
@@ -455,20 +455,22 @@ const event = normalizeEvent({
 // { action: "move", button: "left", x: 4, y: 2, modifiers: 0, id: ... }
 ~~~
 
-createInputRouter aplica esse normalizador automaticamente. Ele descarta o
-mesmo objeto e também eventos semanticamente idênticos consecutivos; id não
-participa da comparação. sameEvent(a, b) e semanticEventKey(event) estão
-disponíveis para adaptadores e testes.
+createInputRouter aplica esse normalizador automaticamente. Ele apenas
+normaliza: dois eventos consecutivos iguais são duas entregas reais
+(repetição de tecla, digitação rápida, scroll) e chegam os dois ao app.
+sameEvent(a, b) e semanticEventKey(event) estão disponíveis para adaptadores
+e testes; id não participa da comparação.
 
 ~~~ts
 const source = createNormalizedInput(legacySource);
 const router = createInputRouter(app, source);
 ~~~
 
-A janela semântica é consecutiva: um poll() que retorna null libera o próximo
-evento igual. Fontes que emitem duas ações realmente idênticas sem um poll
-vazio devem usar phase="repeat" para teclado ou criar um router com
-createNormalizedInput(source, { deduplicate: false }).
+Uma fonte que comprovadamente entrega o mesmo evento duas vezes pode pedir a
+deduplicação semântica com createNormalizedInput(source, { deduplicate: true }).
+A janela é consecutiva: um poll() que retorna null libera o próximo evento
+igual. Não ligue essa opção por precaução, porque ela descarta repetição de
+tecla legítima.
 
 ## 12. Texto multiline, largura e wrapping
 
@@ -622,10 +624,10 @@ const value = slateReact.toReact(Text({ text: "ponte" }));
 Para montar elementos React reais no terminal, use o reconciler correspondente
 à sua major:
 
-| React | react-reconciler |
-| --- | --- |
-| 18.x | 0.29.x |
-| 19.x | 0.31.x |
+| React | react-reconciler | peer range |
+| --- | --- | --- |
+| 18.x | 0.29.x | `^18.3.0` + `^0.29.2` |
+| 19.x | 0.31.x | `^19.0.0` + `^0.31.0` |
 
 Exemplo de instalação:
 
@@ -637,10 +639,14 @@ npm install react@18 react-reconciler@0.29
 npm install react@19 react-reconciler@0.31
 ~~~
 
-O peer range da Slate aceita as linhas compatíveis, mas não pode escolher a
-versão por você: fixe o par no seu package.json. Se o par estiver errado,
-createReactTerminalRoot lança uma mensagem indicando a linha correta. Para
-React 18 sem reconciler terminal, use createReactAdapter.
+O peer range da Slate recusa qualquer outra linha, mas npm não sabe expressar
+"React 18 exige 0.29 e React 19 exige 0.31": um par cruzado ainda instala. Por
+isso createReactTerminalRoot compara a major de React instalada com a major
+para a qual o reconciler foi construído e recusa o par indicando a linha
+correta. checkReactCompatibility(reactVersion, reconcilerReactRange,
+createContainerArity) expõe a mesma decisão sem criar um root, útil em
+diagnóstico e testes. Para React 18 sem reconciler terminal, use
+createReactAdapter.
 
 O reconciler terminal recebe elementos React. Uma maneira agnóstica de criar
 hosts é usar strings de host e React.createElement:
@@ -758,6 +764,8 @@ sem necessidade.
   subscribeInput.
 - Não misture duas fontes que leem o mesmo input sem normalização: o mesmo
   clique pode chegar como dois aliases ou como objetos distintos.
+- Não use deduplicate: true para consertar entrada dupla: igualdade de conteúdo
+  não distingue entrega duplicada de repetição legítima. Corrija a fonte.
 
 ## 19. Testes e diagnóstico
 

@@ -17,14 +17,17 @@ export function Stack(props: LayoutProps = {}): SlateVNode { return layout(props
 /** Composable horizontal layout primitive. */
 export function Row(props: LayoutProps = {}): SlateVNode { return layout(props, "row"); }
 export function Column(props: LayoutProps = {}): SlateVNode { return Stack(props); }
-export function Grid({ columns = 2, gap = 1, children, ...props }: LayoutProps & { readonly columns?: number }): SlateVNode {
+export function Grid({ columns = 2, gap = 1, children, ...props }: Omit<LayoutProps, "columns"> & { readonly columns?: number }): SlateVNode {
   const count = Math.max(1, Math.trunc(columns));
-  const items = (Array.isArray(children) ? children : [children]).map((child, index) => Container({ id: `${String(props.id ?? "grid")}:cell:${index}`, width: `${100 / count}%`, children: child }));
+  // Cells are only named when the grid itself is named. A hard-coded prefix
+  // would make two anonymous grids collide on `grid:cell:0`.
+  const baseId = props.id === undefined ? undefined : String(props.id);
+  const items = (Array.isArray(children) ? children : [children]).map((child, index) => Container({ id: baseId === undefined ? undefined : `${baseId}:cell:${index}`, width: `${100 / count}%`, children: child }));
   return Container({ ...props, children: items, style: { flexWrap: "wrap", flexDirection: "row", gap: gap as FlexDimension, ...(props.style ?? {}) } });
 }
 export function Spacer(props: Omit<NodeProps, "children"> = {}): SlateVNode { return Block({ ...props, flexGrow: typeof props.flexGrow === "number" ? props.flexGrow : 1 }); }
 
-export interface PanelProps extends LayoutProps { readonly title?: SlateChild; readonly border?: boolean | BorderSpec; }
+export interface PanelProps extends Omit<LayoutProps, "title"> { readonly title?: SlateChild; readonly border?: boolean | BorderSpec; }
 export function Panel({ title, border = true, children, style, ...props }: PanelProps = {}): SlateVNode {
   return Container({ ...props, border, children: [title === undefined ? null : Text({ text: String(title), foreground: props.foreground as string | undefined }), children], style: { padding: 1, ...(style && typeof style === "object" ? style : {}) } });
 }
@@ -42,8 +45,15 @@ export function Divider({ direction = "row", foreground = "#475569", ...props }:
 export function Field({ label, children, ...props }: LayoutProps & { readonly label: SlateChild; readonly children?: SlateChild }): SlateVNode {
   return Stack({ ...props, children: [Text({ text: String(label ?? ""), foreground: props.foreground as string | undefined }), children] });
 }
+/**
+ * The `id` names the input, because that is the element applications focus and
+ * read; the surrounding field gets a derived id so the two never collide.
+ */
 export function TextField({ label, ...props }: LayoutProps & { readonly label: SlateChild } & Parameters<typeof Input>[0]): SlateVNode {
-  return Field({ label, ...props, children: Input(props) });
+  const fieldId = props.id === undefined ? undefined : `${String(props.id)}:field`;
+  const { value, defaultValue, placeholder, cursor, onChange, onSubmit, focusable, capturePointer, ...field } = props;
+  void value; void defaultValue; void placeholder; void cursor; void onChange; void onSubmit; void focusable; void capturePointer;
+  return Field({ ...field, id: fieldId, label, children: Input(props) });
 }
 export function Alert({ children, title, severity = "info", ...props }: PanelProps & { readonly severity?: "info" | "success" | "warning" | "error" }): SlateVNode {
   const colors = { info: "#38bdf8", success: "#4ade80", warning: "#facc15", error: "#fb7185" };

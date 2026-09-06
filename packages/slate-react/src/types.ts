@@ -254,7 +254,8 @@ export interface NodeProps {
   readonly onFocus?: (node: ComponentTreeNode) => EventResult | void;
   readonly onBlur?: (node: ComponentTreeNode) => EventResult | void;
   readonly onScroll?: (x: number, y: number, node: ComponentTreeNode) => EventResult | void;
-  readonly [property: string]: unknown;
+  /** Widget state object created by `createInputController` and friends. */
+  readonly controller?: unknown;
 }
 
 export type SlateProps = NodeProps;

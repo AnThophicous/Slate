@@ -139,10 +139,19 @@ impl<W: Write> AnsiRenderer<W> {
                 let point = Point::new(x, y);
                 let current = frame.get(point).expect("frame coordinates are valid");
                 let old = previous.get(point).expect("frame coordinates are valid");
-                if current == old || current.is_continuation() {
+                if current.is_continuation() {
                     continue;
                 }
                 let grapheme = frame.grapheme(point).expect("frame coordinates are valid");
+                // A cell only stores the leading char of its grapheme, so
+                // "a" + U+0301 and "a" + U+0300 compare equal. Compare the
+                // complete grapheme too, otherwise the change never reaches
+                // the terminal.
+                if current == old
+                    && grapheme == previous.grapheme(point).expect("frame coordinates are valid")
+                {
+                    continue;
+                }
                 write!(
                     self.writer,
                     "\x1b[{};{}H{}{}",
@@ -281,6 +290,21 @@ mod tests {
         let before = renderer.rendered_frames();
         renderer.render(&second).unwrap();
         assert_eq!(renderer.rendered_frames(), before + 1);
+    }
+
+    #[test]
+    fn delta_repaints_a_changed_combining_grapheme() {
+        let mut first = Frame::new(Size::new(2, 1));
+        let mut second = Frame::new(Size::new(2, 1));
+        first.write_text(Point::new(0, 0), "a\u{301}", Style::default());
+        second.write_text(Point::new(0, 0), "a\u{300}", Style::default());
+        let mut renderer =
+            AnsiRenderer::new(Vec::new()).clear_before_render(false).throttle(Duration::ZERO);
+        renderer.render(&first).unwrap();
+        renderer.render(&second).unwrap();
+        let output = String::from_utf8(renderer.into_inner()).expect("ansi output is utf-8");
+        let delta = output.split("\u{1b}[0m").nth(1).unwrap_or_default();
+        assert!(delta.contains("a\u{300}"), "delta was {delta:?}");
     }
 
     #[test]

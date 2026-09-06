@@ -28,16 +28,34 @@ export interface WritableSignal<T> extends ReadableSignal<T> {
   readonly update: (value: T | ((previous: T) => T)) => void;
 }
 
-interface Observer {
-  readonly run: () => void;
+interface Scope {
   readonly dependencies: Set<ReadableSignal<unknown>>;
   readonly cleanups: Set<() => void>;
+}
+
+interface Observer extends Scope {
+  readonly run: () => void;
   active: boolean;
 }
 
-let activeObserver: Observer | undefined;
-let batchDepth = 0;
-const pendingSubscribers = new Set<() => void>();
+/**
+ * Dependency tracking and batching live in a single process-wide context so
+ * signals created by this package and by `@slate-terminal/react` observe the
+ * same reader and the same batch depth instead of two disconnected systems.
+ */
+interface ReactiveContext {
+  observer: Scope | undefined;
+  batchDepth: number;
+  readonly pending: Set<() => void>;
+}
+
+const contextKey = Symbol.for("slate.reactive.context.v1");
+const contextHost = globalThis as unknown as Record<symbol, ReactiveContext | undefined>;
+const context: ReactiveContext = contextHost[contextKey] ?? (contextHost[contextKey] = { observer: undefined, batchDepth: 0, pending: new Set<() => void>() });
+
+export interface ComputedSignal<T> extends ReadableSignal<T> {
+  readonly dispose: () => void;
+}
 
 export function signal<T>(initial: T): WritableSignal<T> {
   let value = initial;
@@ -45,7 +63,7 @@ export function signal<T>(initial: T): WritableSignal<T> {
   const result: WritableSignal<T> = {
     __slateSignal: true,
     get: () => {
-      activeObserver?.dependencies.add(result as ReadableSignal<unknown>);
+      context.observer?.dependencies.add(result as ReadableSignal<unknown>);
       return value;
     },
     peek: () => value,
@@ -55,7 +73,7 @@ export function signal<T>(initial: T): WritableSignal<T> {
       if (Object.is(value, next)) return;
       value = next;
       for (const listener of [...listeners]) {
-        if (batchDepth > 0) pendingSubscribers.add(listener);
+        if (context.batchDepth > 0) context.pending.add(listener);
         else listener();
       }
     },
@@ -64,25 +82,36 @@ export function signal<T>(initial: T): WritableSignal<T> {
   return result;
 }
 
-export function computed<T>(derive: () => T): ReadableSignal<T> {
-  const state = signal(derive());
-  effect(() => state.set(derive()));
-  return { __slateSignal: true, get: state.get, peek: state.peek, subscribe: state.subscribe };
+/**
+ * Derives a signal from other signals. A computed created inside an effect is
+ * released with that effect; a standalone computed must be disposed by the
+ * caller, otherwise its subscription to the source outlives it.
+ */
+export function computed<T>(derive: () => T): ComputedSignal<T> {
+  const state = signal(untracked(derive));
+  const stop = effect(() => state.set(derive()));
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    stop();
+  };
+  context.observer?.cleanups.add(dispose);
+  return { __slateSignal: true, get: state.get, peek: state.peek, subscribe: state.subscribe, dispose };
 }
 
 export function effect(run: () => void): () => void {
   let observer: Observer;
   const execute = () => {
     if (!observer.active) return;
-    for (const cleanup of observer.cleanups) cleanup();
-    observer.cleanups.clear();
+    runCleanups(observer);
     observer.dependencies.clear();
-    const previous = activeObserver;
-    activeObserver = observer;
+    const previous = context.observer;
+    context.observer = observer;
     try {
       run();
     } finally {
-      activeObserver = previous;
+      context.observer = previous;
     }
     for (const dependency of observer.dependencies) observer.cleanups.add(dependency.subscribe(observer.run));
   };
@@ -96,33 +125,51 @@ export function effect(run: () => void): () => void {
   return () => {
     if (!observer.active) return;
     observer.active = false;
-    for (const cleanup of observer.cleanups) cleanup();
-    observer.cleanups.clear();
+    runCleanups(observer);
     observer.dependencies.clear();
   };
 }
 
+function runCleanups(scope: Scope): void {
+  const cleanups = [...scope.cleanups];
+  scope.cleanups.clear();
+  for (const cleanup of cleanups) cleanup();
+}
+
 export function batch(run: () => void): void {
-  batchDepth += 1;
+  context.batchDepth += 1;
   try {
     run();
   } finally {
-    batchDepth -= 1;
-    if (batchDepth === 0) {
-      const subscribers = [...pendingSubscribers];
-      pendingSubscribers.clear();
+    context.batchDepth -= 1;
+    if (context.batchDepth === 0) {
+      const subscribers = [...context.pending];
+      context.pending.clear();
       for (const subscriber of subscribers) subscriber();
     }
   }
 }
 
 export function untracked<T>(run: () => T): T {
-  const previous = activeObserver;
-  activeObserver = undefined;
+  const previous = context.observer;
+  context.observer = undefined;
   try {
     return run();
   } finally {
-    activeObserver = previous;
+    context.observer = previous;
+  }
+}
+
+/** Runs `run` while recording every signal it reads. */
+export function track<T>(run: () => T): { readonly value: T; readonly dependencies: readonly ReadableSignal<unknown>[]; readonly dispose: () => void } {
+  const scope: Scope = { dependencies: new Set(), cleanups: new Set() };
+  const previous = context.observer;
+  context.observer = scope;
+  try {
+    const value = run();
+    return { value, dependencies: [...scope.dependencies], dispose: () => runCleanups(scope) };
+  } finally {
+    context.observer = previous;
   }
 }
 

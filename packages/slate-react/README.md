@@ -86,13 +86,18 @@ layout, focus, keyboard/mouse events, ANSI rendering, and output scheduling.
 The reconciler peer is optional for React-free consumers. Pin a compatible pair
 when using real React elements:
 
-| React | `react-reconciler` |
-| --- | --- |
-| 18.x | 0.29.x |
-| 19.x | 0.31.x |
+| React | `react-reconciler` | peer range |
+| --- | --- | --- |
+| 18.x | 0.29.x | `^18.3.0` + `^0.29.2` |
+| 19.x | 0.31.x | `^19.0.0` + `^0.31.0` |
 
-If the pair is missing or incompatible, `createReactTerminalRoot` reports the
-expected line. `createReactAdapter(React)` remains the simpler bridge when
+The peer ranges exclude every other line, but npm cannot express that React 18
+requires 0.29 and React 19 requires 0.31, so a crossed pair still installs.
+`createReactTerminalRoot` compares the installed React major with the major the
+reconciler was built for and refuses the pair with the line to install;
+`checkReactCompatibility(reactVersion, reconcilerReactRange, createContainerArity)`
+exposes the same decision without creating a root. A missing peer reports the
+expected line as well. `createReactAdapter(React)` remains the simpler bridge when
 React should only consume Slate nodes, including React 18 applications that do
 not need a terminal reconciler.
 

@@ -4,7 +4,7 @@ import { createFlexLayoutEngine, type LayoutEngine, type LayoutTreeNode, type Vi
 import { createSlateRoot, reconcile, type ReconcileOperation } from "./reconcile.js";
 import { renderTreeToAnsi, type TerminalRenderOptions } from "./terminal.js";
 import { displayWidth, segmentGraphemes, wrapText } from "./text.js";
-import { resolveTree } from "./vnode.js";
+import { resolveTree, STYLE_ALIASES } from "./vnode.js";
 import type { ComponentTreeNode, ElementId, EventResult, NodeProps, ReadableSignal, SlateChild, SlateEvent } from "./types.js";
 import { createNormalizedInput, isEmergencyExit, normalizeEvent } from "./input.js";
 
@@ -100,6 +100,12 @@ export interface SlateApplication<S> {
   readonly remove: (id: ElementId) => boolean;
   readonly subscribe: (listener: (commit: SlateCommit) => void) => () => void;
   readonly subscribeInput: (listener: SlateInputHandler) => () => void;
+  /** Observes failures raised by renders that run outside a caller's stack. */
+  readonly subscribeError: (listener: (error: unknown) => void) => () => void;
+  /** Observes `close`, so an embedding renderer can tear itself down too. */
+  readonly subscribeClose: (listener: () => void) => () => void;
+  /** Routes an error to the observers; returns false when nobody handled it. */
+  readonly reportError: (error: unknown) => boolean;
   readonly dispatch: (event: SlateEvent) => EventResult;
   readonly focusManager: FocusManager;
   readonly focus: (id: ElementId) => boolean;
@@ -122,8 +128,10 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   const focusManager = createFocusManager(configured.initialFocus);
   const listeners = new Set<(commit: SlateCommit) => void>();
   const inputListeners = new Set<SlateInputHandler>();
+  const errorListeners = new Set<(error: unknown) => void>();
+  const closeListeners = new Set<() => void>();
   const scrollValues = new Map<ElementId, { x: number; y: number }>();
-  const uncontrolledValues = new Map<ElementId, string | number | boolean>();
+  const uncontrolledValues = new Map<ElementId, WidgetState>();
   const overrides = new Map<ElementId, Readonly<Record<string, unknown>>>();
   const removed = new Set<ElementId>();
   const appended = new Map<ElementId, ComponentTreeNode[]>();
@@ -131,10 +139,15 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   let viewport = normalizeViewport(configured.viewport ?? { width: 80, height: 24 });
   let hovered: ElementId | undefined;
   let tree: ComponentTreeNode | null = null;
+  /** The tree exactly as the view produced it, before imperative edits. */
+  let sourceTree: ComponentTreeNode | null = null;
+  let sourceIndex: Map<ElementId, ComponentTreeNode> | undefined;
   let layout: LayoutTreeNode | null = null;
+  let layoutDirty = true;
   let operations: readonly ReconcileOperation[] = [];
   let dependencies: Array<() => void> = [];
   let presentationDependencies: Array<() => void> = [];
+  let scopeDisposers: Array<() => void> = [];
   let mounted = false;
   let rendering = false;
   let rerender = false;
@@ -170,6 +183,10 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
       rerender = true;
       return operations;
     }
+    // Rendering is what makes an app live, whatever asked for it. An embedding
+    // renderer such as React drives `render()` directly with `autoMount: false`,
+    // and its tree still has to be torn down by `unmount`/`close`.
+    mounted = true;
     cancelSchedule();
     rendering = true;
     try {
@@ -183,19 +200,24 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
         const tracked = track(() => {
           const value = typeof view === "function" ? (view as (state: S | undefined) => SlateChild)(appState.get()) : view;
           root.render(value);
-          const nextTree = applyEdits(root.getTree(), overrides, removed, appended);
+          const source = root.getTree();
+          const nextTree = applyEdits(source, overrides, removed, appended);
           const nextOperations = reconcile(tree, nextTree);
-          return { operations: nextOperations, tree: nextTree };
+          return { operations: nextOperations, tree: nextTree, source };
         });
         const presentation = track(() => {
           if (tracked.value.tree) collectReactiveReads(tracked.value.tree);
         });
         for (const unsubscribe of dependencies) unsubscribe();
         for (const unsubscribe of presentationDependencies) unsubscribe();
+        for (const dispose of scopeDisposers) dispose();
         dependencies = tracked.dependencies.map(dependency => dependency.subscribe(queueRender));
         presentationDependencies = presentation.dependencies.map(dependency => dependency.subscribe(queuePresentation));
+        scopeDisposers = [tracked.dispose, presentation.dispose];
         operations = tracked.value.operations;
         tree = tracked.value.tree;
+        sourceTree = tracked.value.source;
+        sourceIndex = undefined;
         present(operations);
       } while (rerender);
     } finally {
@@ -217,12 +239,17 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     cancelSchedule();
     for (const unsubscribe of dependencies) unsubscribe();
     for (const unsubscribe of presentationDependencies) unsubscribe();
+    for (const dispose of scopeDisposers) dispose();
     dependencies = [];
     presentationDependencies = [];
+    scopeDisposers = [];
     root.render(null);
     operations = reconcile(tree, null);
     tree = null;
+    sourceTree = null;
+    sourceIndex = undefined;
     layout = null;
+    layoutDirty = true;
     overrides.clear();
     removed.clear();
     appended.clear();
@@ -236,10 +263,23 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   };
 
   const close = () => {
+    for (const listener of [...closeListeners]) {
+      try { listener(); } catch (error) { reportError(error); }
+    }
     const result = unmount();
     listeners.clear();
     inputListeners.clear();
+    closeListeners.clear();
+    errorListeners.clear();
     return result;
+  };
+
+  const reportError = (error: unknown): boolean => {
+    if (errorListeners.size === 0) return false;
+    for (const listener of [...errorListeners]) {
+      try { listener(error); } catch { /* error observers must not mask the original failure */ }
+    }
+    return true;
   };
 
   const setState = (action: S | ((previous: S) => S)) => {
@@ -249,8 +289,11 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
 
   const update = (id: ElementId, patch: Partial<NodeProps>): boolean => {
     if (!tree || !findNode(tree, id)) return false;
-    for (const property of ["value", "selectedIndex", "checked", "activeIndex", "cursor"] as const) uncontrolledValues.delete(id);
-    const next = { ...(overrides.get(id) ?? {}), ...normalizePatch(patch), id } as Record<string, unknown>;
+    const normalized = normalizePatch(patch);
+    // An imperative edit replaces the widget's own state for the properties it
+    // actually sets, and leaves every other internal value untouched.
+    for (const property of VALUE_PROPERTIES) if (normalized[property] !== undefined) delete uncontrolledValues.get(id)?.[property];
+    const next = { ...(overrides.get(id) ?? {}), ...normalized, id } as Record<string, unknown>;
     overrides.set(id, next);
     queueRender();
     return true;
@@ -285,6 +328,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
 
   const setViewport = (next: Viewport) => {
     viewport = normalizeViewport(next);
+    layoutDirty = true;
     queueRender();
   };
 
@@ -292,6 +336,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     const previous = focusManager.focused();
     if (!focusManager.focus(id)) return false;
     if (previous !== id) emitFocus(previous, id);
+    queuePresentation();
     return true;
   };
 
@@ -299,6 +344,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     const previous = focusManager.focused();
     focusManager.blur();
     if (previous !== undefined) emitFocus(previous, undefined);
+    queuePresentation();
   };
 
   const dispatch = (event: SlateEvent): EventResult => {
@@ -318,6 +364,9 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
       if (focusManager.handle(event)) {
         const next = focusManager.focused();
         if (next !== previous) emitFocus(previous, next);
+        // Focus is painted, so the move must reach the terminal even though the
+        // component tree itself did not change.
+        queuePresentation();
         return "consumed";
       }
     }
@@ -370,6 +419,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     if (!tree || !findNode(tree, id)) return false;
     const current = scrollValues.get(id) ?? { x: layoutFor(id)?.scrollLeft ?? 0, y: layoutFor(id)?.scrollTop ?? 0 };
     scrollValues.set(id, { x: Math.max(0, current.x + deltaX), y: Math.max(0, current.y + deltaY) });
+    layoutDirty = true;
     queueRender();
     return true;
   };
@@ -377,6 +427,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   const scrollTo = (id: ElementId, x: number, y: number): boolean => {
     if (!tree || !findNode(tree, id)) return false;
     scrollValues.set(id, { x: Math.max(0, x), y: Math.max(0, y) });
+    layoutDirty = true;
     queueRender();
     return true;
   };
@@ -409,6 +460,15 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
       inputListeners.add(listener);
       return () => inputListeners.delete(listener);
     },
+    subscribeError: listener => {
+      errorListeners.add(listener);
+      return () => errorListeners.delete(listener);
+    },
+    subscribeClose: listener => {
+      closeListeners.add(listener);
+      return () => closeListeners.delete(listener);
+    },
+    reportError,
     dispatch,
     focusManager,
     focus,
@@ -439,10 +499,16 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   }
 
   function present(nextOperations: readonly ReconcileOperation[]): void {
-    const layoutTree = tree ? withScrollValues(tree, scrollValues) : null;
-    layout = layoutTree ? layoutEngine.layout(layoutTree, viewport) : null;
-    if (tree && layout) focusManager.setOrder(collectFocusable(tree, layout).map(target => target.node.id));
-    else focusManager.setOrder([]);
+    // Layout is the expensive half of a frame. A paint-only change - a colour,
+    // a text style, a link - keeps the previous boxes instead of measuring the
+    // whole tree again.
+    if (layoutDirty || layout === null || tree === null || affectsLayout(nextOperations)) {
+      const layoutTree = tree ? withScrollValues(tree, scrollValues) : null;
+      layout = layoutTree ? layoutEngine.layout(layoutTree, viewport) : null;
+      layoutDirty = false;
+      if (tree && layout) focusManager.setOrder(collectFocusable(tree, layout).map(target => target.node.id));
+      else focusManager.setOrder([]);
+    }
     const commit: SlateCommit = { operations: nextOperations, tree, layout, viewport };
     for (const listener of [...listeners]) listener(commit);
   }
@@ -467,15 +533,17 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     // default widget behavior, but an enabled ancestor may still handle the
     // same hit-tested event.
     if (node.props.disabled === true) return "ignored";
+    // "ignored" means "not mine": the next handler on the same node, and then
+    // the widget's own behavior, still get a chance to run.
     const handler = node.props.onEvent;
     if (typeof handler === "function") {
       const result = handler(event, node);
-      if (isEventResult(result)) return result;
+      if (isEventResult(result) && result !== "ignored") return result;
     }
     const specific = event.kind === "key" ? node.props.onKey : event.kind === "mouse" ? node.props.onMouse : event.kind === "paste" ? node.props.onPaste : event.kind === "resize" ? node.props.onResize : event.kind === "ime" ? node.props.onIme : undefined;
     if (typeof specific === "function") {
       const result = specific(event, node);
-      if (isEventResult(result)) return result;
+      if (isEventResult(result) && result !== "ignored") return result;
     }
     const controller = node.props.controller;
     if (isController(controller)) {
@@ -502,8 +570,15 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
       pendingRender = false;
       pendingPresentation = false;
       if (!mounted) return;
-      if (shouldRender) renderNow();
-      else present([]);
+      // This runs on a microtask or a timer, so a throw here has no caller to
+      // catch it. Route it to the observers - typically the terminal
+      // controller, which still has to restore the terminal modes.
+      try {
+        if (shouldRender) renderNow();
+        else present([]);
+      } catch (error) {
+        if (!reportError(error)) throw error;
+      }
     };
     if (frameRate > 0) scheduledTimer = setTimeout(run, 1000 / frameRate);
     else queueMicrotask(run);
@@ -538,7 +613,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     const code = event.code ?? event.text ?? "";
     if (event.kind === "key" && (code === "Enter" || code === "Return")) return invokeCallback(node.props.onSubmit, node, event, current) ?? "consumed";
     const chars = segmentGraphemes(current);
-    let cursor = clampInteger(readNodeValue(node, "cursor", chars.length), chars.length);
+    let cursor = clampInteger(readNodeValue(node, "cursor", chars.length), chars.length, chars.length);
     const insert = segmentGraphemes(event.text ?? (event.kind === "key" ? code : ""));
     const insertsText = event.kind === "paste" || event.kind === "ime" || (event.kind === "key" && insert.length === 1 && ((event.modifiers ?? 0) & 6) === 0);
     if (insertsText) {
@@ -564,16 +639,28 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     return "ignored";
   }
 
+  /**
+   * Commits one editing step. The caret is stored even when the text is
+   * unchanged or owned by the application, so moving it keeps working on a
+   * controlled input.
+   */
   function commitInput(node: ComponentTreeNode, value: string, cursor: number): EventResult {
-    const callback = node.props.onChange;
-    if (typeof callback === "function") {
-      const result = callback(value, node);
-      return isEventResult(result) ? result : "render";
+    const previous = String(readNodeValue(node, "value", node.props.defaultValue ?? ""));
+    const nextCursor = Math.max(0, Math.min(segmentGraphemes(value).length, Math.trunc(cursor)));
+    let result: EventResult = "render";
+    if (value !== previous) {
+      const callback = node.props.onChange;
+      if (typeof callback === "function") {
+        const outcome = callback(value, node);
+        result = isEventResult(outcome) ? outcome : "render";
+      } else if (isControlled(node, "value")) {
+        result = "consumed";
+      } else {
+        writeNodeValue(node, "value", value);
+      }
     }
-    if (node.props.value !== undefined && !isWritable(node.props.value)) return "consumed";
-    writeNodeValue(node, "value", value);
-    if (node.props.cursor === undefined || isWritable(node.props.cursor)) writeNodeValue(node, "cursor", cursor);
-    return "render";
+    if (!isControlled(node, "cursor")) writeNodeValue(node, "cursor", nextCursor);
+    return result;
   }
 
   function handleSelect(node: ComponentTreeNode, event: SlateEvent): EventResult {
@@ -584,7 +671,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     const code = event.code;
     const direction = code === "Up" || code === "ArrowUp" || code === "Left" || code === "ArrowLeft" ? -1 : code === "Down" || code === "ArrowDown" || code === "Right" || code === "ArrowRight" ? 1 : 0;
     if (direction === 0) return "ignored";
-    const current = clampInteger(readNodeValue(node, "selectedIndex", 0), 0);
+    const current = clampInteger(readNodeValue(node, "selectedIndex", 0), options.length - 1, 0);
     const next = findEnabled(options, current, direction);
     if (next === current) return "consumed";
     const callback = node.props.onChange;
@@ -592,7 +679,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
       const result = callback(next, node);
       return isEventResult(result) ? result : "render";
     }
-    if (node.props.selectedIndex !== undefined && !isWritable(node.props.selectedIndex)) return "consumed";
+    if (isControlled(node, "selectedIndex")) return "consumed";
     writeNodeValue(node, "selectedIndex", next);
     return "render";
   }
@@ -606,7 +693,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
       const result = callback(next, node);
       return isEventResult(result) ? result : "render";
     }
-    if (node.props.checked !== undefined && !isWritable(node.props.checked)) return "consumed";
+    if (isControlled(node, "checked")) return "consumed";
     writeNodeValue(node, "checked", next);
     return "render";
   }
@@ -618,14 +705,14 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     if (tabs.length === 0) return "consumed";
     const direction = event.code === "Left" || event.code === "ArrowLeft" ? -1 : event.code === "Right" || event.code === "ArrowRight" ? 1 : 0;
     if (direction === 0) return "ignored";
-    const current = clampInteger(readNodeValue(node, "activeIndex", 0), 0);
+    const current = clampInteger(readNodeValue(node, "activeIndex", 0), tabs.length - 1, 0);
     const next = (current + direction + tabs.length) % tabs.length;
     const callback = node.props.onChange;
     if (typeof callback === "function") {
       const result = callback(next, node);
       return isEventResult(result) ? result : "render";
     }
-    if (node.props.activeIndex !== undefined && !isWritable(node.props.activeIndex)) return "consumed";
+    if (isControlled(node, "activeIndex")) return "consumed";
     writeNodeValue(node, "activeIndex", next);
     return "render";
   }
@@ -636,7 +723,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     if (items.length === 0) return "consumed";
     let next: number | undefined;
     if (event.kind === "key") {
-      const current = clampInteger(readNodeValue(node, "activeIndex", 0), items.length - 1);
+      const current = clampInteger(readNodeValue(node, "activeIndex", 0), items.length - 1, 0);
       if (event.code === "Up" || event.code === "ArrowUp") next = Math.max(0, current - 1);
       else if (event.code === "Down" || event.code === "ArrowDown") next = Math.min(items.length - 1, current + 1);
       else if (event.code === "Home") next = 0;
@@ -648,14 +735,14 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
       next = Math.max(0, Math.min(items.length - 1, Math.trunc(event.y - target.content.y + target.scrollTop)));
     } else return "ignored";
     if (next === undefined) return "ignored";
-    const current = clampInteger(readNodeValue(node, "activeIndex", 0), items.length - 1);
+    const current = clampInteger(readNodeValue(node, "activeIndex", 0), items.length - 1, 0);
     if (next === current) return "consumed";
     const callback = node.props.onChange;
     if (typeof callback === "function") {
       const result = callback(next, node);
       return isEventResult(result) ? result : "render";
     }
-    if (node.props.activeIndex !== undefined && !isWritable(node.props.activeIndex)) return "consumed";
+    if (isControlled(node, "activeIndex")) return "consumed";
     writeNodeValue(node, "activeIndex", next);
     return "render";
   }
@@ -674,6 +761,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     const current = scrollValues.get(node.id) ?? { x: layoutFor(node.id)?.scrollLeft ?? 0, y: layoutFor(node.id)?.scrollTop ?? 0 };
     const next = { x: Math.max(0, current.x + deltaX), y: Math.max(0, current.y + deltaY) };
     scrollValues.set(node.id, next);
+    layoutDirty = true;
     const callback = node.props.onScroll;
     if (typeof callback === "function") {
       const result = callback(next.x, next.y, node);
@@ -686,16 +774,59 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     return "render";
   }
 
-  function readNodeValue(node: ComponentTreeNode, property: "value" | "selectedIndex" | "checked" | "activeIndex" | "cursor", fallback: unknown): unknown {
-    if (uncontrolledValues.has(node.id)) return uncontrolledValues.get(node.id);
+  /** Every widget state property gets its own slot; `value` never aliases `cursor`. */
+  function readNodeValue(node: ComponentTreeNode, property: ValueProperty, fallback: unknown): unknown {
+    const state = uncontrolledValues.get(node.id);
+    if (state && state[property] !== undefined) return state[property];
     return readValue(node.props[property] ?? fallback);
   }
 
-  function writeNodeValue(node: ComponentTreeNode, property: "value" | "selectedIndex" | "checked" | "activeIndex" | "cursor", value: string | number | boolean): void {
-    if (setReactiveValue(node.props[property], value)) return;
-    uncontrolledValues.set(node.id, value);
+  function writeNodeValue(node: ComponentTreeNode, property: ValueProperty, value: string | number | boolean): void {
+    if (setReactiveValue(sourceNode(node.id)?.props[property] ?? node.props[property], value)) return;
+    const state = uncontrolledValues.get(node.id) ?? {};
+    state[property] = value;
+    uncontrolledValues.set(node.id, state);
     overrides.set(node.id, { ...(overrides.get(node.id) ?? {}), [property]: value, id: node.id });
   }
+
+  /**
+   * A property is controlled only when the view itself supplies a plain value
+   * for it. Internal state is written back into the rendered tree, so asking
+   * the rendered node would report every uncontrolled widget as controlled
+   * right after its first edit.
+   */
+  function isControlled(node: ComponentTreeNode, property: ValueProperty): boolean {
+    const declared = sourceNode(node.id)?.props[property];
+    return declared !== undefined && !isWritable(declared);
+  }
+
+  function sourceNode(id: ElementId): ComponentTreeNode | undefined {
+    if (!sourceIndex) {
+      sourceIndex = new Map();
+      if (sourceTree) indexNodes(sourceTree, sourceIndex);
+    }
+    return sourceIndex.get(id);
+  }
+}
+
+const VALUE_PROPERTIES = ["value", "selectedIndex", "checked", "activeIndex", "cursor"] as const;
+type ValueProperty = typeof VALUE_PROPERTIES[number];
+/** Widget state kept by Slate, one slot per element and per property. */
+type WidgetState = Partial<Record<ValueProperty, string | number | boolean>>;
+
+function indexNodes(node: ComponentTreeNode, index: Map<ElementId, ComponentTreeNode>): void {
+  if (!index.has(node.id)) index.set(node.id, node);
+  for (const child of node.children) indexNodes(child, index);
+}
+
+/** Props that only change how a node is painted, never where it is placed. */
+const PAINT_ONLY_PROPS: ReadonlySet<string> = new Set(["foreground", "background", "borderColor", "textStyle", "link", "effect", "cursor"]);
+
+function affectsLayout(operations: readonly ReconcileOperation[]): boolean {
+  // No operations means the difference is not in the tree: a signal read only
+  // during presentation can still change the measured text, so measure again.
+  if (operations.length === 0) return true;
+  return operations.some(operation => operation.type !== "update" || Object.keys(operation.changes).some(key => !PAINT_ONLY_PROPS.has(key)));
 }
 
 export function render(view: SlateChild | (() => SlateChild), options?: SlateAppOptions): SlateApplication<undefined>;
@@ -793,6 +924,7 @@ export function createTerminalController<S>(app: SlateApplication<S>, source: Sl
   let lastFrame: string | undefined;
   let firstFrame = true;
   let signalHandler: (() => void) | undefined;
+  let unsubscribeError: (() => void) | undefined;
   let closed = false;
   let handlingError = false;
   let controllerError: unknown;
@@ -829,6 +961,8 @@ export function createTerminalController<S>(app: SlateApplication<S>, source: Sl
     router.stop();
     unsubscribe?.();
     unsubscribe = undefined;
+    unsubscribeError?.();
+    unsubscribeError = undefined;
     if (animationTimer !== undefined) clearTimeout(animationTimer);
     animationTimer = undefined;
     removeSignalHandler();
@@ -853,7 +987,15 @@ export function createTerminalController<S>(app: SlateApplication<S>, source: Sl
       try {
         const size = source.size?.();
         if (size && Number.isFinite(size.width) && Number.isFinite(size.height)) app.setViewport(size);
-        unsubscribe = app.subscribe(write);
+        // A render scheduled on a microtask or a timer has no caller to catch
+        // its failure; without this the terminal would stay in raw mode.
+        unsubscribeError = app.subscribeError(reportError);
+        unsubscribe = app.subscribe(() => {
+          write();
+          // Animated content can appear at any commit: a spinner that starts
+          // spinning must start its own frame loop then, not only at start().
+          scheduleAnimation();
+        });
         write();
         if (closed) return;
         installSignalHandler();
@@ -889,6 +1031,7 @@ export function createTerminalController<S>(app: SlateApplication<S>, source: Sl
   }
 
   function scheduleAnimation(): void {
+    if (animationTimer !== undefined || closed) return;
     if (animationFps <= 0 || !router.running() || !hasAnimatedContent(app.getTree())) return;
     animationTimer = setTimeout(() => {
       animationTimer = undefined;
@@ -1012,47 +1155,7 @@ function normalizePatch(patch: Partial<NodeProps>): Readonly<Record<string, unkn
   delete result.children;
   const style = { ...(isRecord(result.style) ? result.style : {}) } as Record<string, unknown>;
   let styleChanged = isRecord(result.style);
-  const aliases: Readonly<Record<string, string>> = {
-    direction: "flexDirection",
-    wrap: "flexWrap",
-    gap: "gap",
-    rowGap: "rowGap",
-    columnGap: "columnGap",
-    flexGrow: "flexGrow",
-    flexShrink: "flexShrink",
-    flexBasis: "flexBasis",
-    width: "width",
-    height: "height",
-    minWidth: "minWidth",
-    maxWidth: "maxWidth",
-    minHeight: "minHeight",
-    maxHeight: "maxHeight",
-    justifyContent: "justifyContent",
-    alignItems: "alignItems",
-    alignContent: "alignContent",
-    alignSelf: "alignSelf",
-    position: "position",
-    top: "top",
-    right: "right",
-    bottom: "bottom",
-    left: "left",
-    padding: "padding",
-    paddingTop: "paddingTop",
-    paddingRight: "paddingRight",
-    paddingBottom: "paddingBottom",
-    paddingLeft: "paddingLeft",
-    margin: "margin",
-    marginTop: "marginTop",
-    marginRight: "marginRight",
-    marginBottom: "marginBottom",
-    marginLeft: "marginLeft",
-    overflow: "overflow",
-    overflowX: "overflowX",
-    overflowY: "overflowY",
-    scrollLeft: "scrollLeft",
-    scrollTop: "scrollTop"
-  };
-  for (const [source, target] of Object.entries(aliases)) {
+  for (const [source, target] of STYLE_ALIASES) {
     if (result[source] !== undefined) {
       style[target] = result[source];
       styleChanged = true;
@@ -1090,7 +1193,7 @@ function focusedCursor(tree: ComponentTreeNode | null, layout: LayoutTreeNode | 
   const value = String(readValue(node.props.value ?? node.props.defaultValue ?? ""));
   const controller = isRecord(node.props.controller) ? node.props.controller : undefined;
   const graphemes = segmentGraphemes(value);
-  const cursor = clampInteger(node.props.cursor ?? controller?.cursor, graphemes.length);
+  const cursor = clampInteger(node.props.cursor ?? controller?.cursor, graphemes.length, graphemes.length);
   const prefix = graphemes.slice(0, cursor).join("");
   const lines = wrapText(prefix, target.content.width);
   const line = lines.at(-1) ?? "";
@@ -1132,9 +1235,10 @@ function isWritable(value: unknown): boolean {
   return isSignal(value) && typeof (value as { readonly set?: unknown }).set === "function";
 }
 
-function clampInteger(value: unknown, fallback: number): number {
+function clampInteger(value: unknown, max: number, fallback: number): number {
   const number = Number(readValue(value));
-  return Number.isFinite(number) ? Math.max(0, Math.min(fallback, Math.trunc(number))) : fallback;
+  const candidate = Number.isFinite(number) ? Math.trunc(number) : fallback;
+  return Math.max(0, Math.min(max, candidate));
 }
 
 function activates(event: SlateEvent): boolean {

@@ -83,8 +83,9 @@ normal e `closeTerminal()` para restaurar os modos nativos.
 
 Eventos de mouse carregam `target` do hit-test e respeitam clipping, scroll,
 ordem visual e coordenadas fora da viewport. `normalizeEvent` também aceita
-aliases de terminais/Windows e `createNormalizedInput` remove duplicatas
-semanticamente iguais. `LogView` aceita tanto `string` quanto linhas com
+aliases de terminais/Windows e `createNormalizedInput` adapta qualquer fonte
+ao contrato canônico (a deduplicação semântica é opcional, via
+`{ deduplicate: true }`). `LogView` aceita tanto `string` quanto linhas com
 `style`, `link` e `runs`.
 
 As cores customizadas usam `#RGB` ou `#RRGGBB`. O renderer preserva UTF-8 e calcula largura de glifos para texto largo.

@@ -60,10 +60,20 @@ function diffNode(previous: ComponentTreeNode | null, next: ComponentTreeNode | 
 
 function diffChildren(previous: readonly ComponentTreeNode[], next: readonly ComponentTreeNode[], path: string, operations: ReconcileOperation[]): void {
   const used = new Set<number>();
+  // Keys and IDs are indexed once per level: matching each child with a linear
+  // scan turns an unchanged list of n children into O(n^2) comparisons.
+  const byKey = new Map<Key, number[]>();
+  const byId = new Map<ElementId, number[]>();
+  for (let index = 0; index < previous.length; index += 1) {
+    const child = previous[index];
+    if (!child) continue;
+    if (child.key !== null) push(byKey, child.key, index);
+    push(byId, child.id, index);
+  }
   for (let nextIndex = 0; nextIndex < next.length; nextIndex += 1) {
     const nextChild = next[nextIndex];
     if (!nextChild) continue;
-    const previousIndex = findPreviousIndex(previous, nextChild, nextIndex, used);
+    const previousIndex = findPreviousIndex(previous, nextChild, nextIndex, used, byKey, byId);
     const childPath = `${path}${nextIndex}/`;
     if (previousIndex < 0) {
       operations.push({ type: "insert", path: childPath, node: nextChild });
@@ -80,11 +90,21 @@ function diffChildren(previous: readonly ComponentTreeNode[], next: readonly Com
   }
 }
 
-function findPreviousIndex(previous: readonly ComponentTreeNode[], next: ComponentTreeNode, nextIndex: number, used: Set<number>): number {
-  if (next.key !== null) {
-    return previous.findIndex((candidate, index) => !used.has(index) && candidate.key === next.key);
-  }
-  const sameId = previous.findIndex((candidate, index) => !used.has(index) && candidate.id === next.id);
+function push<K>(index: Map<K, number[]>, key: K, value: number): void {
+  const bucket = index.get(key);
+  if (bucket) bucket.push(value);
+  else index.set(key, [value]);
+}
+
+function firstFree(bucket: readonly number[] | undefined, used: ReadonlySet<number>): number {
+  if (!bucket) return -1;
+  for (const index of bucket) if (!used.has(index)) return index;
+  return -1;
+}
+
+function findPreviousIndex(previous: readonly ComponentTreeNode[], next: ComponentTreeNode, nextIndex: number, used: Set<number>, byKey: ReadonlyMap<Key, number[]>, byId: ReadonlyMap<ElementId, number[]>): number {
+  if (next.key !== null) return firstFree(byKey.get(next.key), used);
+  const sameId = firstFree(byId.get(next.id), used);
   if (sameId >= 0) return sameId;
   const positional = previous[nextIndex];
   return positional && positional.key === null && !used.has(nextIndex) ? nextIndex : -1;
@@ -102,7 +122,29 @@ function propChanges(previous: ComponentTreeNode, next: ComponentTreeNode): Read
   for (const key of keys) {
     const previousValue = previous.props[key];
     const nextValue = next.props[key];
-    if (!Object.is(previousValue, nextValue)) changes[key] = nextValue;
+    if (!sameValue(previousValue, nextValue)) changes[key] = nextValue;
   }
   return changes;
+}
+
+/**
+ * Prop containers such as `style` are rebuilt on every render, so identity
+ * alone reports an update for an unchanged tree. Plain objects and arrays are
+ * therefore compared one level deep; anything else keeps identity semantics.
+ */
+function sameValue(previous: unknown, next: unknown): boolean {
+  if (Object.is(previous, next)) return true;
+  if (Array.isArray(previous) && Array.isArray(next)) {
+    return previous.length === next.length && previous.every((item, index) => Object.is(item, next[index]));
+  }
+  if (!isPlainObject(previous) || !isPlainObject(next)) return false;
+  const previousKeys = Object.keys(previous);
+  if (previousKeys.length !== Object.keys(next).length) return false;
+  return previousKeys.every(key => Object.prototype.hasOwnProperty.call(next, key) && Object.is(previous[key], next[key]));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  return prototype === Object.prototype || prototype === null;
 }

@@ -4,17 +4,43 @@ export type ReactiveValue<T> = T | ReadableSignal<T>;
 export type StateAction<S> = S | ((previous: S) => S);
 export type Subscriber = () => void;
 
-interface Observer {
-  readonly run: () => void;
+/** A computed signal owns an effect; `dispose` releases its subscriptions. */
+export interface ComputedSignal<T> extends ReadableSignal<T> {
   readonly dispose: () => void;
+}
+
+export interface TrackedRun<T> {
+  readonly value: T;
+  readonly dependencies: readonly ReadableSignal<unknown>[];
+  /** Releases every scope-owned resource created during the tracked run. */
+  readonly dispose: () => void;
+}
+
+interface Scope {
   readonly dependencies: Set<ReadableSignal<unknown>>;
   readonly cleanups: Set<() => void>;
+}
+
+interface Observer extends Scope {
+  readonly run: () => void;
+  readonly dispose: () => void;
   active: boolean;
 }
 
-let activeObserver: Observer | undefined;
-let batchDepth = 0;
-const pendingSubscribers = new Set<Subscriber>();
+/**
+ * Dependency tracking and batching live in a single process-wide context so
+ * signals created by `@slate-terminal/core`, by this package, or by a duplicated
+ * copy of either one observe the same reader and the same batch depth.
+ */
+interface ReactiveContext {
+  observer: Scope | undefined;
+  batchDepth: number;
+  readonly pending: Set<Subscriber>;
+}
+
+const contextKey = Symbol.for("slate.reactive.context.v1");
+const contextHost = globalThis as unknown as Record<symbol, ReactiveContext | undefined>;
+const context: ReactiveContext = contextHost[contextKey] ?? (contextHost[contextKey] = { observer: undefined, batchDepth: 0, pending: new Set<Subscriber>() });
 
 export function signal<T>(initial: T): WritableSignal<T> {
   let value = initial;
@@ -42,14 +68,27 @@ export function signal<T>(initial: T): WritableSignal<T> {
   return target;
 }
 
-export function computed<T>(derive: () => T): ReadableSignal<T> {
-  const state = signal(derive());
-  effect(() => state.set(derive()));
+/**
+ * Derives a signal from other signals. The returned value owns an effect, so a
+ * computed created inside another effect or inside a tracked render is released
+ * with its owner; standalone computeds must be disposed by the caller.
+ */
+export function computed<T>(derive: () => T): ComputedSignal<T> {
+  const state = signal(untracked(derive));
+  const stop = effect(() => state.set(derive()));
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    stop();
+  };
+  context.observer?.cleanups.add(dispose);
   return {
     __slateSignal: true,
     get: state.get,
     peek: state.peek,
-    subscribe: state.subscribe
+    subscribe: state.subscribe,
+    dispose
   };
 }
 
@@ -57,15 +96,14 @@ export function effect(run: () => void): () => void {
   let observer: Observer;
   const execute = () => {
     if (!observer.active) return;
-    for (const cleanup of observer.cleanups) cleanup();
-    observer.cleanups.clear();
+    runCleanups(observer);
     observer.dependencies.clear();
-    const previous = activeObserver;
-    activeObserver = observer;
+    const previous = context.observer;
+    context.observer = observer;
     try {
       run();
     } finally {
-      activeObserver = previous;
+      context.observer = previous;
     }
     for (const dependency of observer.dependencies) observer.cleanups.add(dependency.subscribe(observer.run));
   };
@@ -74,8 +112,7 @@ export function effect(run: () => void): () => void {
     dispose: () => {
       if (!observer.active) return;
       observer.active = false;
-      for (const cleanup of observer.cleanups) cleanup();
-      observer.cleanups.clear();
+      runCleanups(observer);
       observer.dependencies.clear();
     },
     dependencies: new Set(),
@@ -87,26 +124,26 @@ export function effect(run: () => void): () => void {
 }
 
 export function batch(run: () => void): void {
-  batchDepth += 1;
+  context.batchDepth += 1;
   try {
     run();
   } finally {
-    batchDepth -= 1;
-    if (batchDepth === 0) {
-      const subscribers = [...pendingSubscribers];
-      pendingSubscribers.clear();
+    context.batchDepth -= 1;
+    if (context.batchDepth === 0) {
+      const subscribers = [...context.pending];
+      context.pending.clear();
       for (const subscriber of subscribers) subscriber();
     }
   }
 }
 
 export function untracked<T>(run: () => T): T {
-  const previous = activeObserver;
-  activeObserver = undefined;
+  const previous = context.observer;
+  context.observer = undefined;
   try {
     return run();
   } finally {
-    activeObserver = previous;
+    context.observer = previous;
   }
 }
 
@@ -118,30 +155,31 @@ export function isSignal(value: unknown): value is ReadableSignal<unknown> {
   return typeof value === "object" && value !== null && (value as ReadableSignal<unknown>).__slateSignal === true && typeof (value as ReadableSignal<unknown>).get === "function";
 }
 
-export function track<T>(run: () => T): { readonly value: T; readonly dependencies: readonly ReadableSignal<unknown>[] } {
-  const dependencies = new Set<ReadableSignal<unknown>>();
-  const previous = activeObserver;
-  activeObserver = {
-    run: () => undefined,
-    dispose: () => undefined,
-    dependencies,
-    cleanups: new Set(),
-    active: true
-  };
+export function track<T>(run: () => T): TrackedRun<T> {
+  const scope: Scope = { dependencies: new Set(), cleanups: new Set() };
+  const previous = context.observer;
+  context.observer = scope;
   try {
-    return { value: run(), dependencies: [...dependencies] };
+    const value = run();
+    return { value, dependencies: [...scope.dependencies], dispose: () => runCleanups(scope) };
   } finally {
-    activeObserver = previous;
+    context.observer = previous;
   }
+}
+
+function runCleanups(scope: Scope): void {
+  const cleanups = [...scope.cleanups];
+  scope.cleanups.clear();
+  for (const cleanup of cleanups) cleanup();
 }
 
 function notify(subscribers: Set<Subscriber>): void {
   for (const subscriber of [...subscribers]) {
-    if (batchDepth > 0) pendingSubscribers.add(subscriber);
+    if (context.batchDepth > 0) context.pending.add(subscriber);
     else subscriber();
   }
 }
 
 function trackDependency(value: ReadableSignal<unknown>): void {
-  activeObserver?.dependencies.add(value);
+  context.observer?.dependencies.add(value);
 }

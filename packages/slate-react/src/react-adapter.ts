@@ -1,7 +1,6 @@
-import type { SlateChild } from "./types.js";
-import { Fragment, createElement, resolveTree } from "./vnode.js";
+import { createElement, resolveTree } from "./vnode.js";
 import { createSlateHooks, type SlateHookRuntime, type SlateHooks, type SlateStore } from "./state.js";
-import type { NodeProps, SlateComponent } from "./types.js";
+import type { NodeProps, SlateChild, SlateComponent } from "./types.js";
 
 export interface ReactRuntime extends SlateHookRuntime {
   readonly createElement: (type: unknown, props: Readonly<Record<string, unknown>> | null, ...children: unknown[]) => unknown;
