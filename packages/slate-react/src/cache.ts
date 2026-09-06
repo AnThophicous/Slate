@@ -438,7 +438,7 @@ export function hashKey(parts: readonly (string | number | Uint8Array)[]): strin
   for (const part of parts) {
     if (part instanceof Uint8Array) hash.update(part);
     else hash.update(String(part));
-    hash.update(" ");
+    hash.update("\u0000");
   }
   return hash.digest("hex").slice(0, 32);
 }
