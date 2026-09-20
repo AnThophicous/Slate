@@ -26,6 +26,15 @@ const semanticFields = [
   "action", "button", "deltaX", "deltaY", "target"
 ] as const;
 
+const scrollDeltas: Readonly<Record<string, readonly [number, number]>> = {
+  scrollup: [0, -1],
+  scrolldown: [0, 1],
+  scrollleft: [-1, 0],
+  scrollright: [1, 0],
+  wheelup: [0, -1],
+  wheeldown: [0, 1]
+};
+
 export interface NormalizedInputOptions {
   /**
    * Opt-in semantic deduplication for sources that are known to deliver the
@@ -38,23 +47,35 @@ export interface NormalizedInputOptions {
 
 /** Normalizes platform-specific key names and assigns an event identity. */
 export function normalizeEvent(event: SlateEvent): SlateEvent {
-  const code = event.code === undefined ? undefined : keyAliases[String(event.code).toLowerCase()] ?? event.code;
-  const action = event.action === undefined ? undefined : mouseActionAliases[compact(String(event.action))] ?? event.action;
-  const button = event.button === undefined ? undefined : mouseButtonAliases[compact(String(event.button))] ?? event.button;
+  const rawCode = typeof event.code === "string" ? event.code : undefined;
+  const rawText = typeof event.text === "string" ? event.text : undefined;
+  const code = rawCode === undefined ? undefined : keyAliases[rawCode.toLowerCase()] ?? keyAliases[compact(rawCode)] ?? rawCode;
+  const rawAction = typeof event.action === "string" ? event.action : undefined;
+  const rawButton = typeof event.button === "string" ? event.button : undefined;
+  const actionKey = rawAction === undefined ? undefined : compact(rawAction);
+  const action = actionKey === undefined ? undefined : mouseActionAliases[actionKey] ?? rawAction as SlateEvent["action"];
+  const button = rawButton === undefined ? undefined : mouseButtonAliases[compact(rawButton)] ?? rawButton as SlateEvent["button"];
+  const phase = normalizePhase(event.phase);
+  let modifiers = integer(event.modifiers) ?? 0;
+  if (event.kind === "key" && rawCode !== undefined && compact(rawCode) === "backtab") modifiers |= 1;
+  const direction = actionKey === undefined ? undefined : scrollDeltas[actionKey];
+  const deltaX = integer(event.deltaX) ?? direction?.[0];
+  const deltaY = integer(event.deltaY) ?? direction?.[1];
   return {
     ...event,
     id: event.id ?? uuid(),
     code,
-    text: event.text ?? (event.kind === "key" && event.code && event.code.length === 1 ? event.code : code && code.length === 1 ? code : undefined),
+    text: rawText ?? (event.kind === "key" && rawCode !== undefined && rawCode.length === 1 ? rawCode : code && code.length === 1 ? code : undefined),
+    phase,
     action,
     button,
     x: integer(event.x),
     y: integer(event.y),
     width: integer(event.width),
     height: integer(event.height),
-    deltaX: integer(event.deltaX),
-    deltaY: integer(event.deltaY),
-    modifiers: integer(event.modifiers) ?? 0
+    deltaX,
+    deltaY,
+    modifiers
   };
 }
 
@@ -70,7 +91,7 @@ export function sameEvent(left: SlateEvent, right: SlateEvent): boolean {
 
 /** Ctrl+C is a process-safe emergency exit in every Slate input path. */
 export function isEmergencyExit(event: SlateEvent): boolean {
-  if (event.kind !== "key" || event.phase === "release" || ((event.modifiers ?? 0) & 2) === 0) return false;
+  if (event.kind !== "key" || normalizePhase(event.phase) === "release" || ((event.modifiers ?? 0) & 2) === 0) return false;
   const code = String(event.code ?? event.text ?? "").toLowerCase();
   return code === "c" || code === "keyc" || code === "ctrl+c";
 }
@@ -105,4 +126,11 @@ function integer(value: unknown): number | undefined {
 
 function compact(value: string): string {
   return value.toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function normalizePhase(value: unknown): SlateEvent["phase"] | undefined {
+  if (typeof value !== "string") return undefined;
+  const phase = compact(value);
+  if (phase === "press" || phase === "repeat" || phase === "release") return phase;
+  return undefined;
 }

@@ -7,11 +7,9 @@ Rust, o runtime é exposto ao Node.js por bindings N-API e a API pública é
 TypeScript/TSX. Teclado, mouse, paste, resize e foco chegam à aplicação pelo
 mesmo contrato de eventos, em Linux, macOS e Windows.
 
-Versão atual: **2.3.0 — New Libraries and Extensions for React**: ponto de
-extensão público para bibliotecas de terceiros, cache em disco com raiz única e
-pré-aquecimento, detecção de capacidade por terminal, console de baixo nível e
-uma rodada de performance no caminho de medição, layout e saída ANSI
-([o que mudou](#230--o-que-mudou)).
+Versão atual: **2.3.0**. O release acrescenta extensões de widgets, cache em
+disco, pré-aquecimento, detecção de capacidades, console de baixo nível e
+integração opcional com React ([o que mudou](#230--o-que-mudou)).
 
 ## Intenção do projeto
 
@@ -66,59 +64,99 @@ em [2.3.0 — o que mudou](#230--o-que-mudou).
 
 ## Instalação
 
+Requisito mínimo: Node.js 18 ou superior. Para renderizar um frame ANSI ou usar
+o runtime Slate com uma fonte de eventos própria, instale apenas:
+
 ```powershell
-npm install @slate-terminal/core @slate-terminal/react @slate-terminal/native
+npm install @slate-terminal/core @slate-terminal/react
 ```
 
-O pacote nativo contém os bindings N-API para o sistema operacional publicado.
-Em desenvolvimento local, `npm run native:build` compila o addon para a
-plataforma atual.
+Essa instalação não exige React e não exige Rust. O nome `@slate-terminal/react`
+identifica o runtime JSX e os componentes; React só entra quando a aplicação usa
+`createReactTerminalRoot()` ou `createReactAdapter()`.
+
+Para ler teclado, mouse, paste, resize e foco do terminal físico, instale também
+o binding N-API:
+
+```powershell
+npm install @slate-terminal/native
+```
+
+O pacote native contém os artefatos publicados para a plataforma. Em um checkout
+do Slate, `npm run native:build` compila o addon localmente e exige Rust. Sem o
+addon, `renderAnsi()` continua funcionando, mas `createTerminalSession()` não
+consegue habilitar os modos nativos e lança `Binding nativo da Slate não
+encontrado; compile slate-node primeiro.`
 
 ## Início rápido
 
-Para uma sessão interativa, `createTerminalSession()` habilita alternate screen,
-raw mode, mouse, paste e focus change como uma operação única com rollback. O
-objeto retornado expõe `input` e um `close()` idempotente; passe `input` para
-`createTerminalController()`.
+### Um frame e fim do processo
 
-```tsx
-import { Button, Container, Input, Text, render, signal } from "@slate-terminal/react";
+`render()` cria uma aplicação e `renderAnsi()` devolve um frame. Esse caminho não
+inicia polling, não habilita raw mode e não espera entrada.
 
-const name = signal("");
-const app = render(() => Container({
-  id: "app",
-  direction: "column",
-  gap: 1,
-  children: [
-    Text({ id: "title", text: "Configurações" }),
-    Input({ id: "name", value: name, placeholder: "Seu nome", onChange: value => name.set(value) }),
-    Button({ id: "save", children: "Salvar", onPress: () => process.stdout.write(`Olá, ${name.peek()}\n`) })
-  ]
-}), { viewport: { width: 80, height: 24 } });
+```js
+import { Container, Text, render } from "@slate-terminal/react";
 
-process.stdout.write(app.renderAnsi());
-```
-
-A forma JSX usa exatamente o mesmo runtime:
-
-```tsx
-import { Button, Container, Input, Text, render, signal } from "@slate-terminal/react";
-
-const name = signal("");
-const view = (
-  <Container id="app" direction="column" gap={1}>
-    <Text>Configurações</Text>
-    <Input value={name} onChange={value => name.set(value)} />
-    <Button onPress={() => name.set("Slate")}>Salvar</Button>
-  </Container>
+const app = render(
+  Container({
+    id: "app",
+    children: Text({ id: "message", text: "Olá, Slate" })
+  }),
+  { viewport: { width: 40, height: 2 } }
 );
 
-const app = render(view, { viewport: { width: 80, height: 24 } });
-process.stdout.write(app.renderAnsi());
+process.stdout.write(app.renderAnsi({ clear: false, hideCursor: true }));
+app.close();
 ```
 
-Configure `jsxImportSource` como `@slate-terminal/react` no `tsconfig.json`. O
-runtime JSX não importa React.
+### Sessão viva com teclado e mouse
+
+Uma sessão viva precisa de três objetos: a sessão nativa fornece `input`, o
+controller conecta input, app e output, e `start()` inicia o polling. O fechamento
+normal chama os dois `close()`; ambos são idempotentes.
+
+```js
+import { createTerminalSession } from "@slate-terminal/core";
+import {
+  Container,
+  Text,
+  createSlateOutput,
+  createTerminalController,
+  render
+} from "@slate-terminal/react";
+
+const app = render(Container({
+  id: "app",
+  children: Text({ id: "message", text: "Pressione Ctrl+C para sair" })
+}), { viewport: { width: 40, height: 2 } });
+
+const session = createTerminalSession();
+const terminal = createTerminalController(
+  app,
+  session.input,
+  createSlateOutput(process.stdout),
+  { onExit: () => session.close() }
+);
+
+const shutdown = () => {
+  terminal.close();
+  session.close();
+};
+
+process.once("SIGTERM", shutdown);
+terminal.start();
+```
+
+O controller já trata `Ctrl+C` como saída de emergência e chama `onExit` depois
+de fechar a árvore. Para um fechamento programático, chame `shutdown()`. O
+exemplo completo com widgets está em
+[`examples/node/interactive.mjs`](examples/node/interactive.mjs), e o contrato
+para agentes está em [`docs/ai-agents.md`](docs/ai-agents.md).
+
+Configure `jsxImportSource` como `@slate-terminal/react` no `tsconfig.json` para
+usar TSX sem importar React. O guia de produção explica o mesmo ciclo com
+TypeScript e as limitações de cada camada.
 
 ## API 2.x
 
@@ -179,6 +217,32 @@ de imagem, o alt text permanece no grid. Uma string base64 também pode ser usad
 diretamente com `mimeType`. `Video` aceita uma sequência de `frames`:
 decodificação de MP4/WebM não é embutida no core, para não introduzir um codec
 falso nem uma dependência nativa obrigatória.
+
+## Material 3 Expressive, Dock e Mosaic
+
+`createMaterialExpressivePreset()` cria tokens semanticos (`primary`,
+`surfaceContainer`, `onSurface`, outline), formas (`square`, `rounded`,
+`double`, `heavy`) e efeitos limitados ao contrato ANSI de `Glow`/`ColorShift`.
+`ExpressiveButton` e `ExpressiveSurface` aceitam `states`, `interaction` e
+callbacks de mouse/foco, deixando a aparencia configuravel. A proposta e
+inspirada em M3, nao uma promessa de CSS, elevacao ou timeline de browser que
+o terminal nao possui.
+
+`Dock({ items })` monta uma barra horizontal com foco, hover, press, disabled,
+icone e label. `Mosaic({ children, columns })` organiza tiles em uma grade;
+`MosaicItem` aceita `Image`/`Video`/`Media`, descricao, selecao, borda e
+`effect`. Ambos usam callbacks e sinais existentes, sem loop de animacao
+escondido e sem exigir React. Para views que recriam a arvore, passe uma
+`interaction` persistente criada por `createExpressiveInteraction()`.
+
+## Imagem para ASCII
+
+O core exporta `rasterToAscii`, `imageToAscii` e `loadRasterFile`. A conversao
+recebe raster RGB/RGBA/grayscale e oferece luminancia perceptual, charset,
+largura, proporcao, alpha, inversao e ANSI24 opt-in. O loader aceita PGM/PPM e
+PNG 8-bit nao interlaced, exige `rootDir` e rejeita traversal, URL, symlink fora
+da raiz e arquivos acima do limite. JPEG, GIF, WebP e TIFF ficam explicitamente
+fora do contrato.
 
 ## Capacidades e portabilidade
 
@@ -418,12 +482,16 @@ contrato de componentes, IDs, eventos e renderer é agnóstico de dispositivo.
   encerramento, mouse/hit-test, eventos, foco, wrapping por grapheme, `LogView`,
   integração React 18/19, adaptação de APIs antigas e testes reais.
 - [Guia de migração do Ink](docs/ink-migration.md)
+- [Referência para agentes de IA](docs/ai-agents.md) — escolha de API, lifecycle,
+  contratos de input e erros do addon native.
 - [Especificação da 2.0](docs/slate-2.0.md)
 - [Política de API](API_POLICY.md) · [Changelog](CHANGELOG.md) ·
   [Contribuição](CONTRIBUTING.md) · [Segurança](SECURITY.md)
 - Exemplos executáveis em [`examples/`](examples), incluindo
+  [`examples/node/interactive.mjs`](examples/node/interactive.mjs): sessão viva
+  com widgets, sinais e fechamento; e
   [`examples/node/lowlevel.mjs`](examples/node/lowlevel.mjs): capacidades,
-  console de baixo nível, pré-aquecimento e uma extensão em um só programa.
+  console de baixo nível, pré-aquecimento e uma extensão.
 
 ## Desenvolvimento
 

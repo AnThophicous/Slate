@@ -26,3 +26,6 @@ export * from "./capabilities.js";
 export * from "./console.js";
 export * from "./extensions.js";
 export * from "./prewarm.js";
+export * from "./material-expressive.js";
+export * from "./dock.js";
+export * from "./mosaic.js";

@@ -61,8 +61,8 @@ const EMPTY_STYLE: TerminalStyle = {
 };
 
 export function renderTreeToAnsi(tree: ComponentTreeNode | null, layout: LayoutTreeNode | null, viewport: Viewport, options: TerminalRenderOptions = {}): string {
-  const width = Math.max(0, Math.floor(viewport.width));
-  const height = Math.max(0, Math.floor(viewport.height));
+  const width = normalizeNonNegativeInteger(viewport.width);
+  const height = normalizeNonNegativeInteger(viewport.height);
   const depth = options.colors ?? options.capabilities?.colors ?? "truecolor";
   const unicode = options.unicode ?? options.capabilities?.unicode ?? true;
   const pooled = options.reuseBuffer !== false;
@@ -78,8 +78,10 @@ export function renderTreeToAnsi(tree: ComponentTreeNode | null, layout: LayoutT
 }
 
 function paintFrame(tree: ComponentTreeNode | null, layout: LayoutTreeNode | null, cells: Cell[][], width: number, height: number, depth: ColorDepth, unicode: boolean, options: TerminalRenderOptions): string {
+  const frameIndex = normalizeFrameIndex(options.frameIndex);
+  const viewportClip = { x: 0, y: 0, width, height };
   if (tree && layout) {
-    paint(tree, layout, cells, { x: 0, y: 0, width, height }, {
+    paint(tree, layout, cells, viewportClip, {
       foreground: normalizeHex(options.defaultForeground),
       background: normalizeHex(options.defaultBackground),
       bold: undefined,
@@ -88,7 +90,7 @@ function paintFrame(tree: ComponentTreeNode | null, layout: LayoutTreeNode | nul
       underline: undefined,
       strikethrough: undefined,
       link: undefined
-    }, options.frameIndex ?? 0, undefined, unicode);
+    }, frameIndex, undefined, unicode);
   }
   const output: string[] = [];
   if (options.clear !== false) output.push("\u001b[2J");
@@ -128,14 +130,14 @@ function paintFrame(tree: ComponentTreeNode | null, layout: LayoutTreeNode | nul
     // reaches the right edge and may leave the next row horizontally shifted.
     output.push(rowIndex === 0 ? line : `\u001b[${rowIndex + 1};1H${line}`);
   }
-  const mediaOutput = collectMedia(tree, layout, options.mediaProtocol ?? "auto", options.frameIndex ?? 0);
+  const mediaOutput = collectMedia(tree, layout, options.mediaProtocol ?? "auto", frameIndex, viewportClip);
   if (mediaOutput.length > 0) {
     output.push(...mediaOutput);
     output.push("\u001b[H");
   }
   if (options.restoreCursor) output.push("\u001b[?25h");
   if (options.cursor) {
-    output.push(`\u001b[${Math.max(1, Math.floor(options.cursor.y) + 1)};${Math.max(1, Math.floor(options.cursor.x) + 1)}H`);
+    output.push(`\u001b[${normalizeNonNegativeInteger(options.cursor.y) + 1};${normalizeNonNegativeInteger(options.cursor.x) + 1}H`);
     output.push(options.hideCursor === true || options.cursor.visible === false ? "\u001b[?25l" : "\u001b[?25h");
   }
   return output.join("\n");
@@ -243,9 +245,8 @@ export function clearFrameBuffer(): void {
 }
 
 function paint(tree: ComponentTreeNode, layout: LayoutTreeNode, cells: Cell[][], parentClip: LayoutRect, inherited: TerminalStyle, frameIndex: number, inheritedEffect: EffectSpec | undefined, unicode: boolean): void {
-  if (tree.props.visible === false || (tree.type === "modal" && tree.props.open !== undefined && readValue(tree.props.open) === false) || layout.layout.width < 1 || layout.layout.height < 1) return;
-  const clip = layout.clip ? intersect(parentClip, layout.clip) : parentClip;
-  if (clip.width < 1 || clip.height < 1) return;
+  const clip = visibleClip(tree, layout, parentClip);
+  if (!clip) return;
   const textStyle = mergeTextStyle(inherited, tree.props.textStyle);
   const style: TerminalStyle = {
     foreground: readColor(tree.props.foreground) ?? textStyle.foreground ?? inherited.foreground,
@@ -259,13 +260,16 @@ function paint(tree: ComponentTreeNode, layout: LayoutTreeNode, cells: Cell[][],
   };
   const effect = readEffect(tree.props.effect) ?? inheritedEffect;
   fill(cells, layout.layout, clip, style);
-  const lines = widgetText(tree, frameIndex).flatMap(line => {
-    const safe = sanitizeTerminalText(line);
-    return tree.props.wrapText === false ? splitLines(safe) : wrapText(safe, layout.content.width);
-  });
-  const origin = layout.content;
-  for (let index = 0; index < lines.length; index += 1) {
-    drawText(cells, origin.x, origin.y + index, lines[index] ?? "", clip, style, effect, frameIndex, index);
+  const textClip = intersect(clip, layout.content);
+  if (textClip.width >= 1 && textClip.height >= 1) {
+    const lines = widgetText(tree, frameIndex).flatMap(line => {
+      const safe = sanitizeTerminalText(line);
+      return tree.props.wrapText === false ? splitLines(safe) : wrapText(safe, layout.content.width);
+    });
+    const origin = layout.content;
+    for (let index = 0; index < lines.length; index += 1) {
+      drawText(cells, origin.x, origin.y + index, lines[index] ?? "", textClip, style, effect, frameIndex, index);
+    }
   }
   // A linear search per child is quadratic on a wide container; one index per
   // parent keeps painting proportional to the number of nodes.
@@ -277,29 +281,54 @@ function paint(tree: ComponentTreeNode, layout: LayoutTreeNode, cells: Cell[][],
   drawBorder(cells, layout.layout, clip, style, tree.props.border, unicode);
 }
 
-function collectMedia(tree: ComponentTreeNode | null, layout: LayoutTreeNode | null, protocol: "auto" | "kitty" | "iterm2" | "none", frameIndex: number): string[] {
+function visibleClip(tree: ComponentTreeNode, layout: LayoutTreeNode, parentClip: LayoutRect): LayoutRect | undefined {
+  if (tree.props.visible === false || (tree.type === "modal" && tree.props.open !== undefined && readValue(tree.props.open) === false)) return undefined;
+  if (!Number.isFinite(layout.layout.width) || !Number.isFinite(layout.layout.height) || layout.layout.width < 1 || layout.layout.height < 1) return undefined;
+  const clip = layout.clip ? intersect(parentClip, layout.clip) : parentClip;
+  if (!Number.isFinite(clip.x) || !Number.isFinite(clip.y) || !Number.isFinite(clip.width) || !Number.isFinite(clip.height) || clip.width < 1 || clip.height < 1) return undefined;
+  return clip;
+}
+
+function collectMedia(tree: ComponentTreeNode | null, layout: LayoutTreeNode | null, protocol: "auto" | "kitty" | "iterm2" | "none", frameIndex: number, parentClip: LayoutRect): string[] {
   if (!tree || !layout) return [];
+  const clip = visibleClip(tree, layout, parentClip);
+  if (!clip) return [];
   const output: string[] = [];
   if (tree.type === "image" || tree.type === "video" || tree.type === "media") {
     const frames = Array.isArray(tree.props.frames) ? tree.props.frames : [];
     const source = tree.type === "video" && frames.length > 0
       ? frames[frameIndex % frames.length]
       : readMediaValue(tree.props.source ?? tree.props.media, tree.props.mimeType);
-    const rendered = renderMedia(source, {
-      x: layout.content.x,
-      y: layout.content.y,
-      width: layout.content.width,
-      height: layout.content.height,
-      protocol: tree.props.protocol === "auto" || tree.props.protocol === "kitty" || tree.props.protocol === "iterm2" || tree.props.protocol === "none" ? tree.props.protocol : protocol
-    });
-    if (rendered) output.push(rendered);
+    if (rectContains(clip, layout.content)) {
+      const rendered = renderMedia(source, {
+        x: layout.content.x,
+        y: layout.content.y,
+        width: layout.content.width,
+        height: layout.content.height,
+        protocol: tree.props.protocol === "auto" || tree.props.protocol === "kitty" || tree.props.protocol === "iterm2" || tree.props.protocol === "none" ? tree.props.protocol : protocol
+      });
+      if (rendered) output.push(rendered);
+    }
   }
   const index = childIndex(tree);
   for (const childLayout of layout.children) {
     const child = index.get(childLayout.id);
-    if (child) output.push(...collectMedia(child, childLayout, protocol, frameIndex));
+    if (child) output.push(...collectMedia(child, childLayout, protocol, frameIndex, clip));
   }
   return output;
+}
+
+function rectContains(container: LayoutRect, content: LayoutRect): boolean {
+  return Number.isFinite(content.x)
+    && Number.isFinite(content.y)
+    && Number.isFinite(content.width)
+    && Number.isFinite(content.height)
+    && content.width >= 1
+    && content.height >= 1
+    && content.x >= container.x
+    && content.y >= container.y
+    && content.x + content.width <= container.x + container.width
+    && content.y + content.height <= container.y + container.height;
 }
 
 const childIndexCache = new WeakMap<ComponentTreeNode, Map<string | number, ComponentTreeNode>>();
@@ -391,24 +420,26 @@ function fill(cells: Cell[][], rect: LayoutRect, clip: LayoutRect, style: Termin
 function drawText(cells: Cell[][], x: number, y: number, text: string, clip: LayoutRect, style: TerminalStyle, effect: EffectSpec | undefined, frameIndex: number, lineIndex: number): void {
   if (y < clip.y || y >= clip.y + clip.height || y < 0 || y >= cells.length) return;
   let cursor = x;
+  let lastDrawnCell: Cell | undefined;
   const characters = segmentGraphemes(text);
   for (const [characterIndex, character] of characters.entries()) {
     const width = graphemeWidth(character);
     const glyphStyle = effectStyle(style, effect, characterIndex, lineIndex, frameIndex, characters.length);
     if (width === 0) {
-      const previous = cells[y]?.[cursor - 1];
-      if (previous && previous.char !== "") {
-        previous.char += character;
-        applyStyle(previous, glyphStyle);
+      if (lastDrawnCell) {
+        lastDrawnCell.char += character;
+        applyStyle(lastDrawnCell, glyphStyle);
       }
       continue;
     }
     if (cursor + width > clip.x + clip.width) break;
+    lastDrawnCell = undefined;
     if (cursor >= clip.x && cursor < clip.x + clip.width && cursor >= 0 && cursor < (cells[y]?.length ?? 0)) {
       const cell = cells[y]?.[cursor];
       if (cell) {
         cell.char = character;
         applyStyle(cell, glyphStyle);
+        lastDrawnCell = cell;
       }
       if (width === 2 && cursor + 1 < clip.x + clip.width && cursor + 1 < (cells[y]?.length ?? 0)) {
         const continuation = cells[y]?.[cursor + 1];
@@ -508,6 +539,14 @@ function finite(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function normalizeNonNegativeInteger(value: unknown): number {
+  return Math.max(0, Math.floor(finite(value, 0)));
+}
+
+function normalizeFrameIndex(value: unknown): number {
+  return normalizeNonNegativeInteger(value);
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -576,7 +615,7 @@ function hasStyle(style: TerminalStyle): boolean {
 }
 
 function normalizeLink(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.length === 0 || /[\u0000-\u001f\u007f]/u.test(value)) return undefined;
+  if (typeof value !== "string" || value.length === 0 || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return undefined;
   return value;
 }
 

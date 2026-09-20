@@ -1,32 +1,77 @@
 # @slate-terminal/react
 
-Production-grade declarative terminal UI for TypeScript and TSX. React is optional: the Slate runtime and window/element API remain available without React, while `createSlateReactRenderer` exposes the same tree and hooks through a real React runtime.
+Declarative terminal UI for TypeScript and TSX. React is optional: the Slate
+runtime, components and window/element API work without React. Install
+`@slate-terminal/native` only when the application needs physical terminal
+input.
 
-```tsx
-import { Button, Container, Input, Text, createSlateOutput, createTerminalController, render, signal } from "@slate-terminal/react";
-import { createInputSource } from "@slate-terminal/core";
+## One-shot rendering
 
-const value = signal("");
+`render()` creates an application. `renderAnsi()` returns one frame and does not
+start polling or open raw mode:
+
+```js
+import { Container, Text, render } from "@slate-terminal/react";
+
 const app = render(
-  <Container id="app" direction="column" gap={1}>
-    <Text>Slate Mosaic</Text>
-    <Input id="value" value={value} onChange={next => value.set(next)} />
-    <Button id="save" onPress={() => value.set("saved")}>Save</Button>
-  </Container>,
-  { viewport: { width: 80, height: 24 } }
+  Container({
+    id: "app",
+    children: Text({ id: "message", text: "Hello from Slate" })
+  }),
+  { viewport: { width: 40, height: 2 } }
 );
 
-const terminal = createTerminalController(app, createInputSource(), createSlateOutput(process.stdout));
-terminal.start();
-// Ctrl+C calls the same close path; use this for normal shutdown too.
-// terminal.close();
+process.stdout.write(app.renderAnsi({ clear: false, hideCursor: true }));
+app.close();
 ```
 
-Use `jsxImportSource: "@slate-terminal/react"` com `jsx: "react-jsx"`. Para integrar uma fonte nativa, passe `{ poll: pollEvent }` a `createInputRouter`. O pacote core fornece os controles de raw mode e mouse capture.
+## Live terminal session
+
+The live path is explicit: `createTerminalSession()` opens native modes and
+provides `input`; `createTerminalController()` connects that input to the app
+and output; `start()` begins polling; `close()` stops polling and closes the
+app.
+
+```js
+import { createTerminalSession } from "@slate-terminal/core";
+import { Container, Text, createSlateOutput, createTerminalController, render } from "@slate-terminal/react";
+
+const app = render(Container({
+  id: "app",
+  children: Text({ id: "message", text: "Press Ctrl+C to exit" })
+}), { viewport: { width: 40, height: 2 } });
+
+const session = createTerminalSession();
+const terminal = createTerminalController(
+  app,
+  session.input,
+  createSlateOutput(process.stdout),
+  { onExit: () => session.close() }
+);
+
+const shutdown = () => {
+  terminal.close();
+  session.close();
+};
+
+process.once("SIGTERM", shutdown);
+terminal.start();
+```
+
+Install `@slate-terminal/core` and `@slate-terminal/react` for the first
+example. Add `@slate-terminal/native` for the second. If the addon is absent,
+`createTerminalSession()` throws; the one-shot path still uses the ANSI fallback.
+
+Use `jsxImportSource: "@slate-terminal/react"` with `jsx: "react-jsx"` for TSX.
+The JSX runtime does not import React. For a custom input source, use
+`createInputRouter` or pass an object implementing `poll()` to
+`createTerminalController`.
 
 Leia o [guia de produção](../../docs/guide.md) para o fluxo completo de
 montagem, `Ctrl+C`, hit-test de mouse, `disabled`, `onEvent`, `onHover`,
 wrapping por grapheme, `LogView` rico, testes Windows e migração de renderers.
+Para contratos mínimos e geração de código por agentes, leia o
+[guia de API para agentes](../../docs/ai-agents.md).
 
 Exports principais:
 
@@ -44,6 +89,8 @@ Exports principais:
 - cache: `createMemoryCache`, `openDiskCache`, `resolveCacheRoot`, `createSessionScratch`, `clearTextCaches`;
 - pré-aquecimento: `prewarm`, `prewarmSync`, `recordPrewarmSamples`;
 - extensões: `registerExtension`, `registerWidget`, `createWidget`, `runExtensionConformance`;
+- expressive: `createMaterialExpressivePreset`, `createExpressiveInteraction`, `ExpressiveSurface`, `ExpressiveButton`;
+- interacao composta: `Dock`, `DockItem`, `Mosaic`, `MosaicItem`;
 - infraestrutura: `resolveTree`, `reconcile`, `createSlateRoot`, `renderTreeToAnsi`.
 
 Desde a 2.3.0, `renderAnsi`/`renderTreeToAnsi` aceitam `capabilities`, `colors`
@@ -53,6 +100,52 @@ bordas ASCII quando o console não garante box drawing. `detectTerminalCapabilit
 terminal real.
 
 Callbacks use the `ignored`, `consumed`, `render`, or `exit` contract. IDs are unique per tree and stable during reconciliation. `createSlateOutput` suppresses duplicate frames; direct writes remain available for integrations that need them.
+
+## Expressive, Dock and Mosaic
+
+`createMaterialExpressivePreset()` fornece tokens terminais inspirados em
+Material 3 Expressive, com formas (`square`, `rounded`, `double`, `heavy`) e
+efeitos `Glow`/`ColorShift` seguros. Os componentes nao importam React e
+aceitam overrides por estado:
+
+```js
+import { ExpressiveButton, createMaterialExpressivePreset } from "@slate-terminal/react";
+
+const expressive = createMaterialExpressivePreset({
+  colors: { primary: "#8bd5ff" },
+  shapes: { rounded: { style: "rounded", color: "#496a85" } }
+});
+const save = expressive.button({ id: "save", shape: "rounded", children: "Salvar" });
+const cancel = ExpressiveButton({ id: "cancel", role: "tertiary", children: "Cancelar" });
+```
+
+`Dock` aceita `items` ou children customizados. `DockItem` expoe `icon`,
+`label`, `active`, `onHover`, `onPress`, `disabled`, `shape` e `border`. `Mosaic`
+e uma grade sem limite artificial de quatro itens; `MosaicItem` aceita `image`,
+`media`, `frames`, `description`, `selected`, `effect`, `interaction`, callbacks
+e children.
+Os componentes so compoem o runtime existente: hover, foco e press sao eventos
+Slate e a animacao usa sinais/effects declarados, sem timer interno.
+Se a view recria a arvore a cada commit, crie `createExpressiveInteraction()` uma
+vez fora da view e passe `interaction` para preservar o estado transitorio.
+
+```js
+import { Dock, Mosaic, MosaicItem, signal } from "@slate-terminal/react";
+
+const activeTab = signal(false);
+
+const navigation = Dock({ id: "dock", items: [
+  { id: "home", icon: "⌂", label: "Home", onPress: () => "render" },
+  { id: "files", icon: "▣", label: "Files", active: activeTab }
+] });
+
+const gallery = Mosaic({ id: "gallery", columns: 2, children: [
+  MosaicItem({ id: "one", image: "data:image/png;base64,...", label: "One" }),
+  MosaicItem({ id: "two", image: "data:image/png;base64,...", label: "Two", shape: "double" }),
+  MosaicItem({ id: "three", label: "Three", variant: "expressive" }),
+  MosaicItem({ id: "four", label: "Four", onPress: () => "render" })
+] });
+```
 
 `createTerminalController` expõe `stop`, `close`, `dispose` e `error`. `Ctrl+C` é
 reservado como saída de emergência e fecha o controller antes de chamar

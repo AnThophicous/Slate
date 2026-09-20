@@ -8,6 +8,8 @@
   "bugs": { "url": "https://github.com/AnThophicous/Slate/issues" },
   "license": "Apache-2.0",
   "engines": { "node": ">=18" },
+  "os": ["win32", "linux", "darwin"],
+  "cpu": ["x64", "arm64"],
   "publishConfig": { "access": "public" },
   "type": "commonjs",
   "main": "./index.js",
@@ -15,6 +17,7 @@
   "files": ["index.js", "index.d.ts", "slate_node.*.node", "README.md"],
   "napi": { "binaryName": "slate_node", "packageName": "@slate-terminal/native" },
   "scripts": {
-    "build": "napi build --manifest-path ../../crates/slate-node/Cargo.toml --output-dir . --package-json-path package.json --platform --release --no-js --no-dts-header"
+    "build": "napi build --manifest-path ../../crates/slate-node/Cargo.toml --output-dir . --package-json-path package.json --platform --release --no-js --no-dts-header",
+    "test": "node --test ../../tests/native-loader-regressions.test.mjs"
   }
 }

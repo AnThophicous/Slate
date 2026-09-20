@@ -29,6 +29,7 @@ export interface SlateCommit {
 export type SlateInputHandler = (event: SlateEvent, app: SlateApplication<unknown>) => EventResult | void;
 
 export interface SlateInputSource {
+  /** Returns one event synchronously, or `null` when the timeout expires. */
   readonly poll: (timeoutMs?: number) => SlateEvent | null;
   /** Optional initial terminal size; resize events remain authoritative. */
   readonly size?: () => Viewport;
@@ -37,15 +38,19 @@ export interface SlateInputSource {
 }
 
 export interface SlateInputRouter {
+  /** Starts polling; repeated calls while active are ignored. */
   readonly start: () => void;
+  /** Pauses polling and keeps the source available for a later `start`. */
   readonly stop: () => void;
-  /** Stops polling, releases the source and closes the attached app. */
+  /** Stops polling, releases the source once and closes the attached app. */
   readonly close: () => void;
   readonly running: () => boolean;
+  /** Returns the first error observed by the router, if any. */
   readonly error: () => unknown;
 }
 
 export interface SlateOutput {
+  /** Writes one complete ANSI frame; terminal controllers observe rejected promises. */
   readonly write: (value: string) => unknown;
 }
 
@@ -63,14 +68,19 @@ export function createSlateOutput(target: SlateOutput | { write(chunk: string, .
 }
 
 export interface TerminalControllerOptions {
+  /** Delay between synchronous input polls, clamped to 60 seconds. */
   readonly intervalMs?: number;
+  /** Maximum animation frequency; zero disables animation scheduling. */
   readonly animationFps?: number;
   readonly render?: TerminalRenderOptions;
+  /** Called once after an input event or signal requests normal exit. */
   readonly onExit?: () => void;
+  /** Receives input, render and output failures before the controller closes. */
   readonly onError?: (error: unknown) => void;
 }
 
 export interface SlateTerminalController extends SlateInputRouter {
+  /** Alias for `close`. */
   readonly dispose: () => void;
 }
 
@@ -82,11 +92,15 @@ export interface FocusBinding {
 }
 
 export interface SlateApplication<S> {
+  /** Mounts the view and renders it synchronously; repeated calls are idempotent. */
   readonly mount: () => readonly ReconcileOperation[];
+  /** Removes the rendered tree while retaining public subscriptions for remounting. */
   readonly unmount: () => readonly ReconcileOperation[];
   /** Unmounts the Slate tree and clears subscriptions held by the app. */
   readonly close: () => readonly ReconcileOperation[];
+  /** Renders synchronously and cancels a pending scheduled render. */
   readonly render: () => readonly ReconcileOperation[];
+  /** Flushes pending work synchronously, mounting first when necessary. */
   readonly flush: () => readonly ReconcileOperation[];
   readonly getTree: () => ComponentTreeNode | null;
   readonly getLayout: () => LayoutTreeNode | null;
@@ -162,6 +176,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   const frameRate = normalizeFrameRate(configured.frameRate);
   const maxRenderPasses = normalizeMaxRenderPasses(configured.maxRenderPasses);
   let pointerCapture: ElementId | undefined;
+  let closing = false;
 
   const queueRender = () => {
     if (!mounted) return;
@@ -179,7 +194,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     if (!rendering) schedule();
   };
 
-  const renderNow = (): readonly ReconcileOperation[] => {
+  const renderNow = (notifyError = true): readonly ReconcileOperation[] => {
     if (rendering) {
       rerender = true;
       return operations;
@@ -221,6 +236,9 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
         sourceIndex = undefined;
         present(operations);
       } while (rerender);
+    } catch (error) {
+      if (notifyError) reportError(error);
+      throw error;
     } finally {
       rendering = false;
     }
@@ -264,15 +282,20 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
   };
 
   const close = () => {
-    for (const listener of [...closeListeners]) {
-      try { listener(); } catch (error) { reportError(error); }
+    if (closing) return [];
+    closing = true;
+    try {
+      for (const listener of [...closeListeners]) {
+        try { listener(); } catch (error) { reportError(error); }
+      }
+      return unmount();
+    } finally {
+      listeners.clear();
+      inputListeners.clear();
+      closeListeners.clear();
+      errorListeners.clear();
+      closing = false;
     }
-    const result = unmount();
-    listeners.clear();
-    inputListeners.clear();
-    closeListeners.clear();
-    errorListeners.clear();
-    return result;
   };
 
   const reportError = (error: unknown): boolean => {
@@ -402,7 +425,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
     }
     if (event.kind === "mouse" && event.action === "press") {
       const target = path.find(candidate => candidate.props.capturePointer === true)
-        ?? path.find(candidate => candidate.props.focusable === true && candidate.props.disabled !== true);
+        ?? path.find(candidate => candidate.props.capturePointer !== false && candidate.props.focusable === true && candidate.props.disabled !== true);
       if (target && target.props.disabled !== true) pointerCapture = target.id;
     }
     try {
@@ -575,7 +598,7 @@ export function createSlateApp<S>(view: SlateChild | ((state: S) => SlateChild),
       // catch it. Route it to the observers - typically the terminal
       // controller, which still has to restore the terminal modes.
       try {
-        if (shouldRender) renderNow();
+        if (shouldRender) renderNow(false);
         else present([]);
       } catch (error) {
         if (!reportError(error)) throw error;
@@ -832,6 +855,7 @@ export function render<S>(view: SlateChild | ((state: S) => SlateChild), initial
 
 export const createApp = render;
 
+/** Connects a synchronous input source to an application dispatch loop. */
 export function createInputRouter<S>(app: SlateApplication<S>, source: SlateInputSource, intervalMs = 16, onExit?: () => void, onError?: (error: unknown) => void): SlateInputRouter {
   let normalizedSource = createNormalizedInput(source);
   let active = false;
@@ -897,6 +921,7 @@ export function createInputRouter<S>(app: SlateApplication<S>, source: SlateInpu
       tick();
     },
     stop: () => {
+      if (closed) return;
       active = false;
       if (timer !== undefined) clearTimeout(timer);
       timer = undefined;
@@ -910,6 +935,12 @@ export function createInputRouter<S>(app: SlateApplication<S>, source: SlateInpu
   };
 }
 
+/**
+ * Couples Slate rendering, synchronous input polling and terminal output.
+ * `start` installs the SIGINT hook, writes the first mounted frame and begins
+ * polling; `stop` pauses polling while `close` releases the source, unmounts
+ * the app and removes all runtime listeners.
+ */
 export function createTerminalController<S>(app: SlateApplication<S>, source: SlateInputSource, output: SlateOutput, options: TerminalControllerOptions = {}): SlateTerminalController {
   let router: SlateInputRouter;
   let unsubscribe: (() => void) | undefined;
@@ -921,9 +952,16 @@ export function createTerminalController<S>(app: SlateApplication<S>, source: Sl
   let closed = false;
   let handlingError = false;
   let controllerError: unknown;
+  let hasControllerError = false;
+  const reportedErrors = new Set<unknown>();
   const animationFps = normalizeAnimationFps(options.animationFps);
   const reportError = (error: unknown) => {
-    if (controllerError === undefined) controllerError = error;
+    if (reportedErrors.has(error)) return;
+    reportedErrors.add(error);
+    if (!hasControllerError) {
+      hasControllerError = true;
+      controllerError = error;
+    }
     if (handlingError) return;
     handlingError = true;
     try { options.onError?.(error); } catch { /* error observers must not break terminal recovery */ }
@@ -931,7 +969,10 @@ export function createTerminalController<S>(app: SlateApplication<S>, source: Sl
     handlingError = false;
   };
   const emit = (value: string) => {
-    try { output.write(value); } catch (error) { reportError(error); }
+    try {
+      const result = output.write(value);
+      if (isThenable(result)) Promise.resolve(result).catch(reportError);
+    } catch (error) { reportError(error); }
   };
   const write = () => {
     // A React root can be created before its first reconciler commit. Do not
@@ -949,7 +990,7 @@ export function createTerminalController<S>(app: SlateApplication<S>, source: Sl
       reportError(error);
     }
   };
-  const stop = () => {
+  const stopResources = () => {
     const wasActive = router.running() || unsubscribe !== undefined;
     router.stop();
     unsubscribe?.();
@@ -963,12 +1004,15 @@ export function createTerminalController<S>(app: SlateApplication<S>, source: Sl
     firstFrame = true;
     if (wasActive) emit("\u001b[0m\u001b[?25h");
   };
+  const stop = () => {
+    if (closed) return;
+    stopResources();
+  };
   const close = () => {
     if (closed) return;
     closed = true;
-    stop();
+    stopResources();
     router.close();
-    app.close();
   };
   router = createInputRouter(app, source, options.intervalMs ?? 16, () => {
     close();
@@ -1002,7 +1046,7 @@ export function createTerminalController<S>(app: SlateApplication<S>, source: Sl
     close,
     dispose: close,
     running: router.running,
-    error: () => controllerError ?? router.error()
+    error: () => hasControllerError ? controllerError : router.error()
   };
 
   function installSignalHandler(): void {
@@ -1252,4 +1296,8 @@ function findEnabled(options: readonly { readonly disabled?: boolean }[], curren
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return isRecord(value) && typeof value.then === "function";
 }

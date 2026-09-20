@@ -1,12 +1,14 @@
-# Migração de Ink para Slate 2.0
+# Migração de Ink para Slate 2.3.0
 
-Slate mantém a ideia de componentes declarativos e JSX, mas não exige React. A migração pode começar com os hosts equivalentes e avançar para o Slate Mosaic quando a interface precisar de layout, foco ou edição por ID.
+Slate mantém a composição declarativa e o JSX, mas separa a árvore da aplicação
+do ciclo de vida do terminal. Essa diferença é o ponto que mais importa ao
+migrar: criar uma view não inicia uma sessão física.
 
 ## Mapeamento rápido
 
-| Ink | Slate 2.0 |
+| Ink | Slate 2.3.0 |
 |---|---|
-| `render(<App />)` | `render(<App />)` de `@slate-terminal/react` |
+| `render(<App />)` inicia a aplicação | `render(<App />)` cria um `SlateApplication`; use um controller para iniciar input/output |
 | `Box` | `Container` |
 | `Text` | `Text` ou texto filho |
 | `useInput` | `useInput(app, handler)` ou `onEvent` |
@@ -14,11 +16,63 @@ Slate mantém a ideia de componentes declarativos e JSX, mas não exige React. A
 | `useFocusManager` | `useFocusManager(app)` |
 | `useCursor` | `useCursor(app)` |
 | `useWindowSize` | `useWindowSize(app)` |
-| `useApp().exit()` | `EventResult` igual a `"exit"` |
-| `useStdin` | `createInputSource` e `createInputRouter` |
+| `useApp().exit()` | handler que retorna `"exit"` |
+| `useStdin` | `createTerminalSession().input` ou fonte própria + `createInputRouter` |
 | `useState` | `signal` ou `app.setState` |
 | Yoga via Ink | `createYogaLayoutEngine` ou `createFlexLayoutEngine` |
-| `@inkjs/ui` | widgets nativos `Input`, `Select`, `Checkbox`, `Tabs`, `Table`, `Spinner`, `Progress`, `Modal`, `ScrollView`, `List` e `Form` |
+| `@inkjs/ui` | `Input`, `Select`, `Checkbox`, `Tabs`, `Table`, `Spinner`, `Progress`, `Modal`, `ScrollView`, `List` e `Form` |
+
+## Instalação e ciclo de vida
+
+Para renderização ANSI e JSX sem React:
+
+```powershell
+npm install @slate-terminal/core @slate-terminal/react
+```
+
+Para teclado e mouse do terminal, acrescente:
+
+```powershell
+npm install @slate-terminal/native
+```
+
+A instalação de native é desnecessária para um frame. Rust só é necessário para
+compilar esse addon a partir do checkout com `npm run native:build`.
+
+O equivalente ao `render(<App />)` de Ink, quando a aplicação precisa de input
+físico, é explícito:
+
+```js
+import { createTerminalSession } from "@slate-terminal/core";
+import { Container, Text, createSlateOutput, createTerminalController, render } from "@slate-terminal/react";
+
+const app = render(Container({
+  id: "app",
+  children: Text({ id: "message", text: "Press Ctrl+C to exit" })
+}), { viewport: { width: 40, height: 2 } });
+
+const session = createTerminalSession();
+const terminal = createTerminalController(
+  app,
+  session.input,
+  createSlateOutput(process.stdout),
+  { onExit: () => session.close() }
+);
+
+const shutdown = () => {
+  terminal.close();
+  session.close();
+};
+
+process.once("SIGTERM", shutdown);
+terminal.start();
+```
+
+`terminal.start()` inicia o polling. `terminal.close()` fecha o router e a
+árvore; `session.close()` libera a fonte e restaura os modos nativos. `Ctrl+C`
+já é tratado pelo controller. Se o addon estiver ausente, o caminho acima falha
+em `createTerminalSession()` com uma mensagem explícita; `renderAnsi()` continua
+disponível.
 
 ## JSX sem React
 
@@ -48,62 +102,66 @@ No `tsconfig.json`:
 ```json
 {
   "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "jsx": "react-jsx",
-    "jsxImportSource": "@slate-terminal/react"
+    "jsxImportSource": "@slate-terminal/react",
+    "strict": true
   }
 }
 ```
 
-Nenhuma instalação de React é necessária para esse caminho. `createReactAdapter` continua disponível quando uma aplicação precisa converter uma árvore Slate para um runtime React existente.
+Esse caminho não instala React. `createReactAdapter` e
+`createReactTerminalRoot` ficam disponíveis quando a aplicação realmente usa
+React e o reconciler compatível.
 
-## Estado
+## Estado, input e foco
 
-Antes:
-
-```tsx
-const [count, setCount] = useState(0);
-```
-
-Depois:
+Sinais substituem o estado local de um componente:
 
 ```tsx
+import { Text, signal } from "@slate-terminal/react";
+
 const count = signal(0);
-const view = <Text>{count}</Text>;
+const view = Text({ id: "count", text: count });
 count.update(value => value + 1);
 ```
 
-Para estado da aplicação, `createSlateApp(view, initialState)` entrega `getState` e `setState`. Para valores locais e controlados, sinais podem ser passados diretamente em `value`, `checked`, `selectedIndex`, `activeIndex` e `progress`.
+Para testar input sem um terminal, use eventos diretamente na aplicação:
 
-## Input e foco
+```js
+import { Button, Container, Input, render, signal } from "@slate-terminal/react";
 
-```tsx
 const name = signal("");
-const app = render(
-  <Container direction="column">
-    <Input id="name" value={name} onChange={value => name.set(value)} />
-    <Button id="save" onPress={() => process.stdout.write(name.peek())}>Salvar</Button>
-  </Container>
-);
+const app = render(Container({
+  id: "app",
+  children: [
+    Input({ id: "name", value: name, onChange: value => name.set(value) }),
+    Button({ id: "save", label: "Salvar" })
+  ]
+}), { viewport: { width: 20, height: 2 } });
 
 app.focus("name");
 app.dispatch({ kind: "key", code: "A" });
 app.dispatch({ kind: "paste", text: " Slate" });
 app.dispatch({ kind: "key", code: "Tab" });
+app.close();
 ```
 
-Mouse e teclado chegam aos mesmos handlers. Para uma fonte nativa, conecte `pollEvent` do pacote core a `createInputRouter` e habilite raw mode, mouse capture, paste e focus change no ciclo de vida da aplicação.
-
-## IDs e edição
-
-O Slate Mosaic exige IDs únicos e permite localizar elementos sem percorrer referências externas. Use `app.getTree`, `app.getLayoutNode`, `app.focus`, `app.scroll` e os callbacks do nó para editar o comportamento. No core imperativo, `SlateApp.update`, `setText`, `setPlaceholder`, `setForeground`, `append` e `remove` mantêm a edição compatível com a API anterior.
+Mouse e teclado chegam aos mesmos handlers. Para uma fonte nativa, prefira
+`createTerminalSession().input`; para uma fonte de teste ou de outro processo,
+implemente `poll(timeoutMs)` e conecte-a com `createInputRouter`.
 
 ## Estratégia incremental
 
-1. Instale `@slate-terminal/core`, `@slate-terminal/react` e `@slate-terminal/native`.
-2. Troque `Box` por `Container`, preservando os IDs importantes.
+1. Instale `@slate-terminal/core` e `@slate-terminal/react`.
+2. Troque `Box` por `Container`, preservando IDs que participam de foco e edição.
 3. Troque `useInput` por `onEvent` ou por `useInput(app, handler)`.
 4. Troque `useState` por sinais controlados nos widgets.
-5. Agrupe regiões da tela em containers Mosaic.
-6. Ative o binding nativo e o router de eventos quando a interface estiver pronta.
+5. Adicione `@slate-terminal/native` somente quando a aplicação precisar de
+   input físico.
+6. Feche sempre o controller e a sessão no caminho normal de saída.
 
-O código legado pode continuar usando `renderText`, `createApp` e os nós imperativos enquanto a migração acontece.
+O [guia de produção](guide.md) cobre o ciclo completo. A [referência para agentes](ai-agents.md) resume contratos e erros para ferramentas
+que precisam gerar código sem adivinhar o lifecycle.

@@ -61,7 +61,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:typecheck": "tsc --noEmit -p test/tsconfig.json",
-    "test": "npm run build && npm run test:typecheck && node --test test/index.test.mjs test/cache.test.mjs test/capabilities.test.mjs test/components.test.mjs test/console.test.mjs test/extensions.test.mjs test/prewarm.test.mjs"
+    "test": "npm run build && npm run test:typecheck && node --test test/index.test.mjs test/cache.test.mjs test/capabilities.test.mjs test/components.test.mjs test/console.test.mjs test/extensions.test.mjs test/prewarm.test.mjs test/input-regressions.test.mjs test/runtime-regressions.test.mjs test/terminal-regressions.test.mjs test/pointer-regressions.test.mjs test/material-expressive.test.mjs test/dock-mosaic.test.mjs"
   },
   "devDependencies": {
     "react": "^19.0.0",

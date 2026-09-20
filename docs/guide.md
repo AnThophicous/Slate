@@ -1,224 +1,153 @@
-# Guia de produção da Slate 2.3
+# Guia de produção da Slate 2.3.0
 
-Este é o guia completo para construir uma interface de terminal com Slate. Ele
-explica a arquitetura, a escolha dos pacotes, o ciclo de vida do terminal,
-layout, eventos, foco, mouse, estado reativo, texto Unicode, LogView,
-integração com React e migração de renderers antigos.
+Este guia separa os dois caminhos que a API oferece: renderizar um frame ANSI e
+manter uma sessão de terminal viva. A distinção importa porque só o segundo
+abre modos nativos e inicia polling de eventos.
 
-Os exemplos usam TypeScript/TSX e podem ser adaptados para JavaScript usando as
-mesmas funções. A Slate exige Node.js 18 ou superior. O binding nativo oficial
-fornece entrada e operações de terminal para Linux, Windows e macOS; sem ele,
-o renderer ANSI de fallback continua útil para testes e saídas simples.
+Os exemplos usam JavaScript ESM quando precisam ser executados diretamente. A
+mesma API pode ser escrita em TypeScript/TSX. Node.js 18 ou superior é
+necessário. Rust só é necessário para compilar o addon native localmente.
 
 ## 1. Escolha o caminho certo
 
-Há três formas oficiais de usar a Slate:
+Há três entradas públicas:
 
-| Caso | Pacote e API | React necessário? |
+| Caso | Pacote e API | Dependência adicional |
 | --- | --- | --- |
-| Interface declarativa TSX, sem React | @slate-terminal/react + render | Não |
-| Árvore imperativa e compatibilidade de baixo nível | @slate-terminal/core + createApp | Não |
-| Componentes React reais, hooks React e reconciler terminal | @slate-terminal/react + createReactTerminalRoot | Sim |
+| Um frame, teste ou saída gerada | `@slate-terminal/react` + `render` + `renderAnsi` | Nenhuma |
+| Sessão com teclado/mouse do terminal | `@slate-terminal/core` + `createTerminalSession` + `@slate-terminal/react` | `@slate-terminal/native` |
+| Elementos React reais e hooks React | `createReactTerminalRoot` | React e `react-reconciler` compatíveis |
 
-O nome @slate-terminal/react significa que o pacote oferece uma ponte opcional
-para React; o runtime principal não importa React durante o carregamento. Para
-uma aplicação nova, comece pelo caminho sem React. Ele reduz dependências, é
-mais fácil de testar e usa o mesmo contrato de eventos que o caminho React.
+`@slate-terminal/react` não importa React para o runtime JSX próprio. React é um
+peer opcional e só deve ser instalado para a terceira linha da tabela.
 
 ## 2. Instalação
 
-~~~powershell
-npm install @slate-terminal/core @slate-terminal/react @slate-terminal/native
-~~~
-
-Durante o desenvolvimento local deste monorepo:
+Para o primeiro caminho:
 
 ~~~powershell
-npm install
-npm run build
-npm run build:all # opcional; inclui o binding nativo e exige Rust
+npm install @slate-terminal/core @slate-terminal/react
 ~~~
 
-O pacote @slate-terminal/native escolhe o binário da plataforma atual. Se o
-binário não estiver instalado, chamadas como enableRawMode() falham com uma
-mensagem explícita; o renderer TypeScript ainda consegue produzir ANSI.
+Para input físico, acrescente o binding publicado:
+
+~~~powershell
+npm install @slate-terminal/native
+~~~
+
+No checkout do Slate, `npm run native:build` compila o addon para a plataforma
+atual e exige Rust. Sem o addon, renderização ANSI e fontes de eventos próprias
+continuam disponíveis; `createTerminalSession()` lança um erro explícito porque
+ele precisa habilitar raw mode, alternate screen e as capturas do terminal.
 
 ## 3. O modelo Slate Mosaic
 
-Uma aplicação Slate é uma árvore de nós. Cada nó possui:
+Uma aplicação Slate é uma árvore de nós. Cada nó tem um `type`, um `id` estável,
+props de layout e visual, filhos e handlers. `render()` cria a aplicação; não
+inicia uma sessão física.
 
-1. um type (container, text, button, input e outros hosts);
-2. um id estável, usado por foco, edição e reconciliação;
-3. propriedades de layout, visual e comportamento;
-4. filhos que formam a composição visual;
-5. handlers que recebem o evento normalizado.
-
-O fluxo normal é:
+O fluxo de uma sessão viva é:
 
 ~~~text
-fonte nativa/customizada
-        ↓ normalizeEvent
-createInputRouter
-        ↓ app.dispatch
-hit-test ou caminho focado
-        ↓ onEvent → handler específico → widget default
-resultado (ignored/consumed/render/exit)
-        ↓
+createTerminalSession().input
+          ↓
+createTerminalController(app, input, output)
+          ↓ start()
+poll → normalizeEvent → app.dispatch
+          ↓
 layout → frame ANSI → output deduplicado
+          ↓ close()
+app.close() + input.close() + restauração do terminal
 ~~~
 
-IDs precisam ser únicos na árvore inteira. O mesmo ID em dois irmãos torna
-edição e foco ambíguos e é rejeitado pela resolução da árvore.
+IDs precisam ser únicos na árvore inteira. O mesmo ID em dois irmãos torna foco
+e edição ambíguos e é rejeitado pela resolução da árvore.
 
-## 4. Primeiro aplicativo completo
+## 4. Um frame e fim do processo
 
-O exemplo abaixo habilita os modos necessários, conecta input e output e
-garante que o terminal seja restaurado mesmo quando a aplicação termina.
+Este é o caminho mínimo. Ele não exige native, React, raw mode ou uma fonte de
+eventos:
 
-~~~tsx
-import {
-  Button,
-  Container,
-  Input,
-  Text,
-  render,
-  signal,
-  createTerminalController
-} from "@slate-terminal/react";
-import {
-  createInputSource,
-  enableAlternateScreen,
-  enableBracketedPaste,
-  enableFocusChange,
-  enableMouseCapture,
-  enableRawMode
-} from "@slate-terminal/core";
+~~~js
+import { Container, Text, render } from "@slate-terminal/react";
 
-const name = signal("");
-const app = render(() => (
-  <Container id="app" direction="column" gap={1} padding={1}>
-    <Text id="title">Cadastro</Text>
-    <Input
-      id="name"
-      value={name}
-      placeholder="Seu nome"
-      onChange={value => name.set(value)}
-    />
-    <Button id="save" onPress={() => name.set("salvo")}>Salvar</Button>
-  </Container>
-), { viewport: { width: 80, height: 24 } });
-
-const terminal = createTerminalController(
-  app,
-  createInputSource(),
-  { write: value => process.stdout.write(value) }
+const app = render(
+  Container({
+    id: "app",
+    children: Text({ id: "message", text: "Olá, Slate" })
+  }),
+  { viewport: { width: 40, height: 2 } }
 );
 
-enableAlternateScreen();
-enableRawMode();
-enableMouseCapture();
-enableBracketedPaste();
-enableFocusChange();
-terminal.start();
-
-// terminal.close() é idempotente, desmonta a árvore Slate e libera a fonte
-// nativa, que restaura os modos abertos acima.
-function shutdown(): void {
-  terminal.close();
-}
-
-process.once("SIGINT", shutdown);
-~~~
-
-Na prática, o controller já instala um listener de SIGINT e também entende
-Ctrl+C como saída de emergência. O process.once no exemplo é opcional; se ele
-existir, mantenha o callback idempotente como no exemplo.
-
-Para um programa que não usa input contínuo, basta fazer:
-
-~~~ts
-const app = render(Text({ id: "hello", text: "Olá" }), {
-  viewport: { width: 20, height: 2 }
-});
-process.stdout.write(app.renderAnsi());
+process.stdout.write(app.renderAnsi({ clear: false, hideCursor: true }));
 app.close();
 ~~~
 
-## 5. Ciclo de vida e encerramento
+`renderAnsi()` devolve uma string. Ele não mantém um loop vivo; não use esse
+método como substituto de `createTerminalController()`.
 
-Existem três níveis de encerramento:
+## 5. Sessão interativa ponta a ponta
 
-- app.unmount() desmonta a árvore, mas mantém as subscriptions públicas para
-  uma eventual remontagem;
-- app.close() desmonta a árvore e remove subscriptions de listeners do app;
-- router.close() para polling, libera a fonte e fecha o app anexado;
-- controller.stop() pausa polling e restaura cursor/output, mantendo o app
-  montado;
-- controller.close() faz stop() e fecha o app; dispose() é seu alias;
-- closeTerminal() restaura cursor, raw mode, mouse capture, bracketed paste,
-  focus change e alternate screen no binding nativo.
+`createTerminalSession()` abre os modos nativos de forma atômica e fornece
+`session.input`. O controller liga essa fonte ao app, escreve o primeiro frame,
+faz polling e trata `Ctrl+C` como saída de emergência.
 
-Ctrl+C é reservado como comando de emergência. Um evento de tecla com CONTROL e
-código c/C retorna "exit" antes dos handlers de aplicação. Isso evita que um
-onEvent acidentalmente engula o comando e deixe a interface presa em raw mode.
-Um botão ou outro handler pode encerrar normalmente retornando "exit".
-
-~~~ts
-app.subscribeInput(event => {
-  if (event.kind === "key" && event.code === "Escape") return "exit";
-  return "ignored";
-});
-
-// Também é válido fechar explicitamente:
-terminal.close();
-~~~
-
-Use try/finally quando os modos nativos forem habilitados em uma função que
-possa lançar erro:
-
-~~~ts
-try {
-  enableAlternateScreen();
-  enableRawMode();
-  enableMouseCapture();
-  terminal.start();
-} finally {
-  // Em um programa interativo real, chame isto no caminho de encerramento,
-  // depois que o loop deixar de ser necessário.
-  // terminal.close();
-  // closeTerminal();
-}
-~~~
-
-Não escreva sequências ANSI de limpeza/cursor ou process.stdout.write
-diretamente em handlers de negócio. O controller já controla o primeiro frame,
-cursor, deduplicação e ordem de apresentação.
-
-### Sessão interativa segura
-
-Quando o programa controla o terminal inteiro, use a sessão de alto nível para
-que uma falha durante a ativação reverta os modos já abertos:
-
-~~~ts
+~~~js
 import { createTerminalSession } from "@slate-terminal/core";
-import { createTerminalController, createSlateOutput } from "@slate-terminal/react";
+import {
+  Container,
+  Text,
+  createSlateOutput,
+  createTerminalController,
+  render
+} from "@slate-terminal/react";
+
+const app = render(Container({
+  id: "app",
+  children: Text({ id: "message", text: "Pressione Ctrl+C para sair" })
+}), { viewport: { width: 40, height: 2 } });
 
 const session = createTerminalSession();
-const terminal = createTerminalController(app, session.input,
-  createSlateOutput(process.stdout), {
-    onError: error => process.stderr.write(`Slate: ${String(error)}\\n`)
-  });
-terminal.start();
+const terminal = createTerminalController(
+  app,
+  session.input,
+  createSlateOutput(process.stdout),
+  { onExit: () => session.close() }
+);
 
-// Os dois caminhos são idempotentes.
-process.once("SIGINT", () => { terminal.close(); session.close(); });
+const shutdown = () => {
+  terminal.close();
+  session.close();
+};
+
+process.once("SIGTERM", shutdown);
+terminal.start();
 ~~~
 
-`createTerminalController` captura exceções da fonte de input e da saída,
-encerra polling, remove listeners e desmonta o app. `onError` é opcional; o
-erro também fica disponível em `controller.error()`. Uma view que invalida o
-próprio estado em ciclo é interrompida por `maxRenderPasses` (100 por padrão),
-em vez de travar o processo.
+`terminal.close()` para polling, fecha o router e o app. O `session.close()`
+libera a fonte e restaura os modos nativos; os dois caminhos são idempotentes.
+O controller já registra o tratamento de `SIGINT`, então `Ctrl+C` não precisa de
+um listener adicional. Para um botão, retorne `"exit"` no handler ou chame
+`shutdown()` em uma ação explícita.
+
+O exemplo com widgets está em
+[`examples/node/interactive.mjs`](../examples/node/interactive.mjs). Ele inclui
+uma pré-checagem de native para transformar addon ausente em uma mensagem de
+instalação, em vez de deixar um stack trace sem contexto.
+
+### Limitação do addon native
+
+O fallback do core cobre renderização e permite fontes customizadas de eventos.
+Ele não pode fabricar eventos físicos nem habilitar raw mode. Quando o addon não
+está instalado, a chamada `createTerminalSession()` falha com:
+
+~~~text
+Binding nativo da Slate não encontrado; compile slate-node primeiro.
+~~~
+
+Instale `@slate-terminal/native` na mesma versão do core ou, no checkout, rode
+`npm run native:build`. O pacote native publicado contém o artefato da plataforma;
+Rust só entra no caminho de compilação local.
 
 ## 6. JSX sem React
 
@@ -1014,9 +943,70 @@ listExtensions, listWidgets, clearExtensions, runExtensionConformance.
 
 Tema e componentes: createTheme, setTheme, getTheme, peekTheme, withTheme,
 resetTheme, themeColor, themeSpacing, Gauge, KeyHint, StatusBar, Tree,
-flattenTree.
+flattenTree, createMaterialExpressivePreset, ExpressiveSurface,
+ExpressiveButton, Dock, DockItem, Mosaic, MosaicItem.
+
+Raster e ASCII: validateRaster, rasterToAscii, imageToAscii, decodeRaster,
+loadRasterFile.
 
 Quando uma API tiver dúvida de comportamento, observe primeiro o contrato de
 evento e o layout exposto por getLayoutNode(id). A Slate foi desenhada para
 que input, foco, layout e apresentação possam ser inspecionados sem depender
 de efeitos colaterais do terminal.
+
+## 26. Design Expressive, Dock e Mosaic
+
+O preset Expressive traduz papeis semanticos do Material 3 para as primitivas
+que um terminal realmente possui: cor ANSI, espacamento, quatro familias de
+borda e os efeitos `glow`/`colorShift`. Ele nao simula CSS, sombra ou elevacao.
+
+```ts
+import { createMaterialExpressivePreset, Dock, Mosaic, MosaicItem, signal } from "@slate-terminal/react";
+
+const activeTab = signal(false);
+
+const ui = createMaterialExpressivePreset({
+  colors: { primary: "#8bd5ff" },
+  shapes: { rounded: { style: "rounded", color: "#496a85" } }
+});
+const action = ui.button({ id: "build", role: "primary", children: "Build" });
+const dock = Dock({ id: "dock", items: [
+  { id: "home", icon: "⌂", label: "Home", onPress: () => "render" },
+  { id: "build", icon: "▶", label: "Build", active: activeTab }
+] });
+const gallery = Mosaic({ id: "gallery", columns: 2, children: [
+  MosaicItem({ id: "a", image: "data:image/png;base64,...", label: "A" }),
+  MosaicItem({ id: "b", label: "B", shape: "double" }),
+  MosaicItem({ id: "c", label: "C", variant: "expressive" }),
+  MosaicItem({ id: "d", label: "D", onPress: () => "render" })
+] });
+```
+
+`Dock` e `Mosaic` nao guardam selecao global: `active`/`selected` podem ser
+sinais e `onPress` decide a acao. `onHover` recebe o evento real do hit-test;
+`disabled` remove o item do foco e da entrega. `Mosaic` aceita qualquer numero
+de tiles, e `shape`, `border`, `effect`, `columns` e `gap` ficam sob controle da
+aplicacao. Se a view recria a arvore, passe uma `interaction` criada uma vez
+com `createExpressiveInteraction()` para preservar hover/foco entre commits.
+
+## 27. Raster para ASCII
+
+O core nao depende de codec nativo para a conversao basica. Entregue um raster
+RGB/RGBA/grayscale a `rasterToAscii()`/`imageToAscii()` ou decodifique PGM/PPM e
+PNG 8-bit nao interlaced com `decodeRaster()`:
+
+```ts
+import { decodeRaster, imageToAscii } from "@slate-terminal/core";
+import { readFileSync } from "node:fs";
+
+const raster = decodeRaster(readFileSync("./portrait.png"));
+console.log(imageToAscii(raster, {
+  maxWidth: 80,
+  aspectRatio: 0.5,
+  charset: "@%#*+=-:. "
+}));
+```
+
+`loadRasterFile()` exige `rootDir` e rejeita URL, traversal, symlink fora da
+raiz e arquivos acima do limite. ANSI24 e opt-in. JPEG, GIF, WebP e TIFF nao
+fazem parte do contrato; use um decoder externo e entregue seu raster ao core.

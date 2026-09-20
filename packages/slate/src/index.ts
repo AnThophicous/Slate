@@ -338,7 +338,7 @@ export interface SlateNode {
 interface NativeBinding {
   version?(): string;
   render(options: RenderOptions): string;
-  renderText(text: string): string;
+  renderText?(text: string): string;
   renderGlow?(options: { text: string; color: string; to?: string; width?: number; height?: number; x?: number; y?: number; radius?: number; intensity?: number; elapsedMs?: number }): string;
   renderColorShift?(options: { text: string; color: string; to?: string; width?: number; height?: number; x?: number; y?: number; radius?: number; intensity?: number; elapsedMs?: number }): string;
   enableRawMode?(): void;
@@ -360,21 +360,40 @@ interface NativeBinding {
 
 const require = createRequire(import.meta.url);
 let cachedNative: NativeBinding | null | undefined;
+let nativeLoadError: unknown;
 let generatedId = 0;
 
 function native(): NativeBinding | undefined {
   if (cachedNative !== undefined) return cachedNative ?? undefined;
+  nativeLoadError = undefined;
   for (const name of ["@slate-terminal/native", "slate-node"]) {
     try {
-      cachedNative = require(name) as NativeBinding;
-      if (typeof cachedNative.render === "function") return cachedNative;
-    } catch { }
+      const loaded = require(name) as unknown;
+      if (isNativeBinding(loaded)) {
+        cachedNative = loaded;
+        nativeLoadError = undefined;
+        return loaded;
+      }
+      nativeLoadError ??= new TypeError(`O binding nativo ${name} não expõe render()`);
+    } catch (error) {
+      nativeLoadError ??= error;
+    }
   }
   cachedNative = null;
   return undefined;
 }
 
+function isNativeBinding(value: unknown): value is NativeBinding {
+  return typeof value === "object" && value !== null && typeof (value as NativeBinding).render === "function";
+}
+
 export function hasNativeBinding(): boolean { return native() !== undefined; }
+
+/** Returns the cached addon loading error, or undefined when no error occurred. */
+export function getNativeBindingError(): unknown {
+  native();
+  return nativeLoadError;
+}
 
 export function version(): string { return native()?.version?.() ?? VERSION; }
 
@@ -388,7 +407,8 @@ export function renderText(text: string, options: Omit<RenderOptions, "text"> = 
   const all = { ...options, text: sanitizeTerminalText(text) };
   validate(all);
   const binding = native();
-  return binding && Object.keys(options).length === 0 ? binding.renderText(all.text) : binding?.render(all) ?? renderFallback(all);
+  if (binding && Object.keys(options).length === 0) return binding.renderText?.(all.text) ?? binding.render(all);
+  return binding?.render(all) ?? renderFallback(all);
 }
 
 export function glow(text: string, options: EffectOptions): string {
@@ -411,6 +431,8 @@ export function colorShift(text: string, options: EffectOptions & { readonly to:
   if (binding?.renderColorShift) return binding.renderColorShift({ text: safeText, color: hex(options.color), to: hex(options.to), width: options.width, height: options.height, x: options.x, y: options.y, elapsedMs: options.elapsedMs });
   return render({ text: safeText, foreground: hex(options.to), width: options.width, height: options.height, x: options.x, y: options.y });
 }
+
+export * from "./ascii.js";
 
 export function hex(value: string): Color {
   if (/^#[0-9a-fA-F]{3}$/.test(value)) return (`#${value.slice(1).split("").map(char => char + char).join("")}`) as Color;

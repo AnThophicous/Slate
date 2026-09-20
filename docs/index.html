@@ -4,23 +4,23 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="google-site-verification" content="gHvHqcgaODJm4Lo35UEsIIz_r1ZQc8KI8ngd5HuUS0I">
-  <title>Slate 2.2 | Terminal UI for Node.js, TypeScript and Rust</title>
-  <meta name="description" content="Slate 2.2 is a modular terminal UI toolkit for Rust, Node.js, TypeScript and TSX.">
+  <title>Slate 2.3.0 | Terminal UI for Node.js, TypeScript and Rust</title>
+  <meta name="description" content="Slate 2.3.0 is a terminal UI toolkit for Node.js, TypeScript, TSX and Rust with separate one-shot and live-session APIs.">
   <link rel="canonical" href="https://anthophicous.github.io/Slate/">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="Slate 2.2 | Terminal UI Toolkit">
-  <meta property="og:description" content="Build interactive terminal interfaces with Rust, Node.js, TypeScript and TSX.">
+  <meta property="og:title" content="Slate 2.3.0 | Terminal UI Toolkit">
+  <meta property="og:description" content="Render one ANSI frame or run a live terminal session with explicit lifecycle control.">
   <meta property="og:url" content="https://anthophicous.github.io/Slate/">
   <meta property="og:site_name" content="Slate">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="Slate 2.2 | Terminal UI Toolkit">
-  <meta name="twitter:description" content="A modular terminal UI toolkit for Rust, Node.js, TypeScript and TSX.">
+  <meta name="twitter:title" content="Slate 2.3.0 | Terminal UI Toolkit">
+  <meta name="twitter:description" content="Render one ANSI frame or run a live terminal session with explicit lifecycle control.">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "SoftwareSourceCode",
     "name": "Slate",
-    "description": "Slate 2.3 modular terminal UI toolkit with native Node.js, TypeScript and TSX support.",
+    "description": "Slate 2.3.0 terminal UI toolkit with native Node.js, TypeScript and TSX support.",
     "codeRepository": "https://github.com/AnThophicous/Slate",
     "programmingLanguage": ["Rust", "TypeScript", "JavaScript"],
     "license": "https://www.apache.org/licenses/LICENSE-2.0",
@@ -46,9 +46,9 @@
     }
 
     main {
-      width: min(920px, calc(100% - 32px));
+      width: min(980px, calc(100% - 32px));
       margin: 0 auto;
-      padding: 72px 0 64px;
+      padding: 56px 0 64px;
     }
 
     .frame {
@@ -71,8 +71,14 @@
       letter-spacing: -0.08em;
     }
 
+    h2 {
+      margin: 0;
+      font-size: clamp(1.3rem, 3vw, 2rem);
+      letter-spacing: -0.04em;
+    }
+
     .lead {
-      max-width: 680px;
+      max-width: 760px;
       margin: 32px 0 0;
       font-size: clamp(1rem, 2vw, 1.25rem);
       line-height: 1.7;
@@ -102,16 +108,44 @@
 
     .rule {
       height: 1px;
-      margin: 56px 0 32px;
+      margin: 56px 0 40px;
       background: #fff;
       border: 0;
+    }
+
+    .section + .section { margin-top: 40px; }
+
+    .section p,
+    .note,
+    footer {
+      line-height: 1.65;
+    }
+
+    .section p { max-width: 780px; }
+
+    pre {
+      margin: 20px 0 0;
+      padding: 18px 20px;
+      overflow-x: auto;
+      background: #fff;
+      color: #000;
+      line-height: 1.55;
+      tab-size: 2;
+    }
+
+    code { font-family: inherit; }
+
+    .note {
+      margin-top: 20px;
+      border-left: 3px solid #fff;
+      padding-left: 16px;
     }
 
     .features {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 1px;
-      margin: 0;
+      margin: 40px 0 0;
       padding: 0;
       list-style: none;
       background: #fff;
@@ -125,23 +159,13 @@
       line-height: 1.6;
     }
 
-    .prompt {
-      margin: 40px 0 0;
-      padding: 18px 20px;
-      overflow-x: auto;
-      background: #fff;
-      color: #000;
-      line-height: 1.6;
-    }
-
     footer {
-      margin-top: 24px;
+      margin-top: 28px;
       font-size: 0.8rem;
-      line-height: 1.6;
     }
 
     @media (max-width: 520px) {
-      main { width: min(100% - 20px, 920px); padding: 24px 0; }
+      main { width: min(100% - 20px, 980px); padding: 24px 0; }
       .frame { padding: 24px 18px; }
       h1 { font-size: 3.2rem; }
     }
@@ -151,25 +175,77 @@
   <main>
     <section class="frame" aria-labelledby="title">
       <p class="eyebrow">Slate / release 2.3.0</p>
-      <h1 id="title">Terminal interfaces. Kept simple.</h1>
-      <p class="lead">A modular Rust terminal UI toolkit with native Node.js bindings, TypeScript/TSX, Flexbox layout, signals, widgets and reliable keyboard and mouse input.</p>
+      <h1 id="title">Terminal interfaces with an explicit lifecycle.</h1>
+      <p class="lead">Slate is a Rust terminal UI toolkit for Node.js, TypeScript and TSX. The API separates rendering one frame from running a live session, so a caller can see which resources it is opening.</p>
 
       <nav class="actions" aria-label="Slate resources">
         <a href="https://github.com/AnThophicous/Slate">GitHub</a>
-        <a href="https://github.com/AnThophicous/Slate/blob/main/docs/guide.md">Production guide</a>
-        <a href="https://github.com/AnThophicous/Slate/releases">Releases</a>
+        <a href="guide.html">Production guide</a>
+        <a href="ai-agents.html">AI agent API guide</a>
+        <a href="ink-migration.html">Ink migration</a>
       </nav>
 
       <hr class="rule">
 
+      <section class="section" aria-labelledby="one-shot-title">
+        <h2 id="one-shot-title">One frame, no terminal session</h2>
+        <p>Install the core and Slate runtime. This program renders ANSI and exits; it does not enter raw mode or poll input. The native addon is optional for this path.</p>
+        <pre><code>npm install @slate-terminal/core @slate-terminal/react
+
+// hello.mjs
+import { Container, Text, render } from "@slate-terminal/react";
+
+const app = render(
+  Container({
+    id: "app",
+    children: Text({ id: "message", text: "Hello from Slate" })
+  }),
+  { viewport: { width: 40, height: 2 } }
+);
+
+process.stdout.write(app.renderAnsi({ clear: false, hideCursor: true }));
+app.close();</code></pre>
+      </section>
+
+      <section class="section" aria-labelledby="session-title">
+        <h2 id="session-title">A live session</h2>
+        <p>Physical keyboard and mouse input require the optional N-API package. The session opens terminal modes; the controller owns polling and closes the Slate app.</p>
+        <pre><code>npm install @slate-terminal/native
+
+// live.mjs
+import { createTerminalSession } from "@slate-terminal/core";
+import { Container, Text, createSlateOutput, createTerminalController, render } from "@slate-terminal/react";
+
+const app = render(Container({
+  id: "app",
+  children: Text({ id: "message", text: "Press Ctrl+C to exit" })
+}), { viewport: { width: 40, height: 2 } });
+
+const session = createTerminalSession();
+const terminal = createTerminalController(
+  app,
+  session.input,
+  createSlateOutput(process.stdout),
+  { onExit: () => session.close() }
+);
+
+const shutdown = () => {
+  terminal.close();
+  session.close();
+};
+
+process.once("SIGTERM", shutdown);
+terminal.start();</code></pre>
+        <p class="note">If the native addon is missing, <code>createTerminalSession()</code> throws. The ANSI one-shot path still works. In a Slate checkout, build the addon with <code>npm run native:build</code>; in an installed application, install <code>@slate-terminal/native</code> for the matching version and platform.</p>
+      </section>
+
       <ul class="features">
-        <li>Rust core with ANSI rendering and native Node.js support.</li>
-        <li>React-free TSX, optional React 18/19 integration and stable IDs.</li>
-        <li>Keyboard, mouse, resize, paste, focus and emergency Ctrl+C close.</li>
-        <li>Flexbox layout, signals, widgets, multiline text and grapheme-safe wrapping.</li>
+        <li>Rust layout and terminal primitives exposed to Node.js through N-API.</li>
+        <li>React-free runtime JSX; React itself is an optional integration.</li>
+        <li>One-shot ANSI rendering and live input share the same application tree.</li>
+        <li>Keyboard, mouse, resize, paste, focus and cleanup are explicit contracts.</li>
       </ul>
 
-      <p class="prompt">npm install @slate-terminal/core @slate-terminal/react @slate-terminal/native</p>
       <footer>Apache-2.0 · Linux · Windows · macOS · Node.js 18+</footer>
     </section>
   </main>

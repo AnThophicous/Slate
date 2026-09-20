@@ -22,7 +22,8 @@ export function createFocusManager(initial?: ElementId): FocusManager {
   };
   const move = (step: 1 | -1) => {
     if (order.length === 0) return undefined;
-    const index = current === undefined ? (step > 0 ? -1 : 0) : order.indexOf(current);
+    const foundIndex = current === undefined ? -1 : order.indexOf(current);
+    const index = foundIndex < 0 ? (step > 0 ? -1 : 0) : foundIndex;
     const next = order[(index + step + order.length) % order.length];
     if (next !== undefined) current = next;
     return current;
@@ -34,7 +35,7 @@ export function createFocusManager(initial?: ElementId): FocusManager {
     next: () => move(1),
     previous: () => move(-1),
     handle: event => {
-      if (event.kind !== "key" || event.code !== "Tab") return false;
+      if (event.kind !== "key" || isKeyRelease(event) || event.code !== "Tab") return false;
       if ((event.modifiers ?? 0) & 1) move(-1);
       else move(1);
       return true;
@@ -44,6 +45,10 @@ export function createFocusManager(initial?: ElementId): FocusManager {
       if (current !== undefined && !order.includes(current)) current = undefined;
     }
   };
+}
+
+function isKeyRelease(event: SlateEvent): boolean {
+  return typeof event.phase === "string" && event.phase.toLowerCase() === "release";
 }
 
 export interface FocusTarget {

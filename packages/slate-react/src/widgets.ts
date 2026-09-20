@@ -76,7 +76,14 @@ export interface TabsController {
 }
 
 export function Input(props: InputProps = {}): SlateVNode {
-  return createElement<SlateProps>("input", { ...props, onChange: props.onChange as NodeProps["onChange"], focusable: (props.focusable as boolean | undefined) ?? true, capturePointer: props.capturePointer as boolean | undefined ?? true });
+  return createElement<SlateProps>("input", {
+    ...props,
+    onChange: props.onChange as NodeProps["onChange"],
+    onPaste: consumeEmptyTextEvent(props.onPaste),
+    onIme: consumeEmptyTextEvent(props.onIme),
+    focusable: (props.focusable as boolean | undefined) ?? true,
+    capturePointer: props.capturePointer as boolean | undefined ?? true
+  });
 }
 
 export function Select(props: SelectProps = {}): SlateVNode {
@@ -146,14 +153,17 @@ export function createInputController(initial = ""): InputController {
   const value = signal(initial);
   const cursor = signal(segmentGraphemes(initial).length);
   const setText = (text: string, position: number) => {
+    const length = segmentGraphemes(text).length;
     value.set(text);
-    cursor.set(Math.max(0, Math.min(segmentGraphemes(text).length, position)));
+    cursor.set(clampCursor(position, length));
   };
   const handle = (event: SlateEvent): EventResult => {
+    if (event.kind === "key" && isKeyRelease(event)) return "ignored";
     if (event.kind === "paste" || event.kind === "ime") {
-      const insert = segmentGraphemes(event.text ?? "");
+      const insert = segmentGraphemes(typeof event.text === "string" ? event.text : "");
+      if (insert.length === 0) return "consumed";
       const chars = segmentGraphemes(value.peek());
-      const index = cursor.peek();
+      const index = clampCursor(cursor.peek(), chars.length);
       chars.splice(index, 0, ...insert);
       setText(chars.join(""), index + insert.length);
       return "render";
@@ -161,7 +171,7 @@ export function createInputController(initial = ""): InputController {
     if (event.kind !== "key" || (event.code === undefined && event.text === undefined)) return "ignored";
     const code = event.code ?? event.text ?? "";
     const chars = segmentGraphemes(value.peek());
-    const index = cursor.peek();
+    const index = clampCursor(cursor.peek(), chars.length);
     if (code === "Backspace") {
       if (index === 0) return "consumed";
       chars.splice(index - 1, 1);
@@ -175,22 +185,28 @@ export function createInputController(initial = ""): InputController {
       return "render";
     }
     if (code === "Left" || code === "ArrowLeft") {
-      cursor.set(Math.max(0, index - 1));
+      const next = Math.max(0, index - 1);
+      if (next === index) return "consumed";
+      cursor.set(next);
       return "render";
     }
     if (code === "Right" || code === "ArrowRight") {
-      cursor.set(Math.min(chars.length, index + 1));
+      const next = Math.min(chars.length, index + 1);
+      if (next === index) return "consumed";
+      cursor.set(next);
       return "render";
     }
     if (code === "Home") {
+      if (index === 0) return "consumed";
       cursor.set(0);
       return "render";
     }
     if (code === "End") {
+      if (index === chars.length) return "consumed";
       cursor.set(chars.length);
       return "render";
     }
-    const insert = segmentGraphemes(code);
+    const insert = segmentGraphemes(event.text ?? code);
     if (insert.length !== 1 || ((event.modifiers ?? 0) & 6) !== 0) return "ignored";
     chars.splice(index, 0, ...insert);
     setText(chars.join(""), index + insert.length);
@@ -202,13 +218,17 @@ export function createInputController(initial = ""): InputController {
 export function createSelectController(options: readonly SelectOption[], initial = 0): SelectController {
   const selectedIndex = signal(normalizeIndex(options, initial, 1));
   const handle = (event: SlateEvent): EventResult => {
-    if (event.kind !== "key") return "ignored";
+    if (event.kind !== "key" || isKeyRelease(event)) return "ignored";
     if (event.code === "Up" || event.code === "ArrowUp" || event.code === "Left" || event.code === "ArrowLeft") {
-      selectedIndex.set(findEnabled(options, selectedIndex.peek(), -1));
+      const next = findEnabled(options, selectedIndex.peek(), -1);
+      if (next === selectedIndex.peek()) return "consumed";
+      selectedIndex.set(next);
       return "render";
     }
     if (event.code === "Down" || event.code === "ArrowDown" || event.code === "Right" || event.code === "ArrowRight") {
-      selectedIndex.set(findEnabled(options, selectedIndex.peek(), 1));
+      const next = findEnabled(options, selectedIndex.peek(), 1);
+      if (next === selectedIndex.peek()) return "consumed";
+      selectedIndex.set(next);
       return "render";
     }
     return "ignored";
@@ -221,7 +241,9 @@ export function createCheckboxController(initial = false): CheckboxController {
   return {
     checked,
     handle: event => {
-      if (event.kind !== "key" || (event.code !== " " && event.code !== "Enter" && event.code !== "Space")) return "ignored";
+      if (event.kind !== "key" || isKeyRelease(event)) return "ignored";
+      const code = event.code ?? event.text;
+      if (code !== " " && code !== "Enter" && code !== "Space") return "ignored";
       checked.update(value => !value);
       return "render";
     }
@@ -229,14 +251,19 @@ export function createCheckboxController(initial = false): CheckboxController {
 }
 
 export function createTabsController(count: number, initial = 0): TabsController {
-  const activeIndex = signal(Math.max(0, Math.min(Math.max(0, count - 1), initial)));
+  const tabCount = normalizeCount(count);
+  const activeIndex = signal(clampIndex(initial, tabCount));
   return {
     activeIndex,
     handle: event => {
-      if (event.kind !== "key" || count < 1) return "ignored";
-      if (event.code === "Left" || event.code === "ArrowLeft") activeIndex.set((activeIndex.peek() + count - 1) % count);
-      else if (event.code === "Right" || event.code === "ArrowRight") activeIndex.set((activeIndex.peek() + 1) % count);
+      if (event.kind !== "key" || isKeyRelease(event) || tabCount < 1) return "ignored";
+      const current = clampIndex(activeIndex.peek(), tabCount);
+      let next: number;
+      if (event.code === "Left" || event.code === "ArrowLeft") next = (current + tabCount - 1) % tabCount;
+      else if (event.code === "Right" || event.code === "ArrowRight") next = (current + 1) % tabCount;
       else return "ignored";
+      if (next === current && activeIndex.peek() === current) return "consumed";
+      activeIndex.set(next);
       return "render";
     }
   };
@@ -331,14 +358,56 @@ function tableLines(node: ComponentTreeNode): string[] {
 
 function normalizeIndex(options: readonly SelectOption[], value: number, direction: 1 | -1): number {
   if (options.length === 0) return 0;
-  return options[value]?.disabled ? findEnabled(options, value, direction) : Math.max(0, Math.min(options.length - 1, value));
+  const index = clampIndex(value, options.length);
+  return options[index]?.disabled ? findEnabled(options, index, direction) : index;
 }
 
 function findEnabled(options: readonly SelectOption[], current: number, direction: 1 | -1): number {
   if (options.length === 0) return 0;
+  const index = clampIndex(current, options.length);
   for (let step = 1; step <= options.length; step += 1) {
-    const index = (current + direction * step + options.length * 2) % options.length;
-    if (!options[index]?.disabled) return index;
+    const candidate = (index + direction * step + options.length * 2) % options.length;
+    if (!options[candidate]?.disabled) return candidate;
   }
-  return current;
+  return index;
+}
+
+function clampCursor(value: number, length: number): number {
+  const numeric = Number(value);
+  const candidate = Number.isFinite(numeric) ? Math.trunc(numeric) : length;
+  return Math.max(0, Math.min(length, candidate));
+}
+
+function normalizeCount(value: number): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, Math.trunc(numeric)) : 0;
+}
+
+function clampIndex(value: number, count: number): number {
+  if (count < 1) return 0;
+  const numeric = Number(value);
+  const candidate = Number.isFinite(numeric) ? Math.trunc(numeric) : 0;
+  return Math.max(0, Math.min(count - 1, candidate));
+}
+
+function isKeyRelease(event: SlateEvent): boolean {
+  return typeof event.phase === "string" && event.phase.toLowerCase() === "release";
+}
+
+type TextEventHandler = NonNullable<NodeProps["onPaste"]>;
+
+const defaultTextEventHandler: TextEventHandler = event => event.text === undefined || event.text.length === 0 ? "consumed" : "ignored";
+const textEventHandlerCache = new WeakMap<TextEventHandler, TextEventHandler>();
+
+function consumeEmptyTextEvent(handler: NodeProps["onPaste"]): TextEventHandler {
+  if (typeof handler !== "function") return defaultTextEventHandler;
+  const cached = textEventHandlerCache.get(handler);
+  if (cached) return cached;
+  const wrapped: TextEventHandler = (event, node) => {
+    const result = handler(event, node);
+    if (result !== undefined && result !== "ignored") return result;
+    return event.text === undefined || event.text.length === 0 ? "consumed" : "ignored";
+  };
+  textEventHandlerCache.set(handler, wrapped);
+  return wrapped;
 }
