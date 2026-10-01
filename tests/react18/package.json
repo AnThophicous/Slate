@@ -5,7 +5,7 @@
   "description": "Workspace fixture that pins React 18 + react-reconciler 0.29 so the compatibility test needs no dynamic install.",
   "type": "module",
   "devDependencies": {
-    "react": "18.3.1",
+    "react": "19.3.0",
     "react-reconciler": "0.29.2"
   }
 }
